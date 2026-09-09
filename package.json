@@ -1,0 +1,22 @@
+{
+  "name": "dscode",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Agente de código en terminal (tipo OpenCode/Claude Code) con motor DeepSeek intercambiable: API real o scraping del chat web. Modos Plan/Build, contexto de proyecto vía AGENTS.md.",
+  "type": "module",
+  "main": "src/cli.js",
+  "bin": {
+    "dscode": "./src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js",
+    "login": "node src/cli.js login",
+    "calibrate": "node src/cli.js calibrate"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "execa": "^9.3.0",
+    "openai": "^4.56.0",
+    "playwright": "^1.47.0"
+  }
+}

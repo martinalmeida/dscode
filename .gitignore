@@ -1,0 +1,17 @@
+# deps
+node_modules/
+
+# config local (con credenciales / sesión)
+.env
+storage-state.json
+
+# Chromium descargado local (grande, regenerable)
+chrome-linux64/
+chrome/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+.idea/

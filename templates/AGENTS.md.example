@@ -1,0 +1,22 @@
+# Contexto del proyecto
+
+Copia este archivo como `AGENTS.md` en la RAÍZ de tu proyecto (no dentro
+de dscode) para que el agente lo lea automáticamente al arrancar ahí.
+
+## Convenciones
+- (ej.) Usar ES Modules, no CommonJS.
+- (ej.) Los componentes van en src/components/, uno por archivo.
+- (ej.) Nunca modificar archivos dentro de node_modules/ o .git/.
+
+## Cómo correr tests
+(ej.) npm test
+
+## Notas para el agente
+- (ej.) Si vas a instalar una dependencia nueva, pregunta primero.
+- (ej.) Prefiere ediciones mínimas y explicables sobre reescrituras grandes.
+- (ej.) Antes de crear un archivo nuevo, confirma la carpeta correcta con list_directory.
+
+## Puedes tener AGENTS.md adicionales en subcarpetas
+Por ejemplo, un `src/api/AGENTS.md` con convenciones específicas solo para
+esa parte del proyecto — dscode los detecta automáticamente y los suma al
+contexto general.

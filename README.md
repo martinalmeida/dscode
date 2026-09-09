@@ -1,0 +1,204 @@
+# dscode
+
+Agente de código en terminal, al estilo OpenCode / Claude Code, con
+DeepSeek como motor (API real o el chat web por scraping — intercambiable).
+Se instala **una sola vez** en tu máquina y después se usa **desde
+cualquier proyecto**, igual que esas herramientas.
+
+## Qué cambió respecto a la v1
+
+| | v1 | v2 (esto) |
+|---|---|---|
+| Dónde opera | Su propia carpeta (`WORKSPACE_DIR` en `.env`) | El proyecto desde donde lo invocas (`cwd`), con protección explícita para no poder tocarse a sí mismo |
+| Contexto | Solo `AGENTS.md` en la raíz | `AGENTS.md` (raíz + anidados) + carpetas `.agent/`, `agents/`, `.deepseek/` |
+| Escritura de archivos | Directa, sin confirmación | Pide confirmación antes de **sobrescribir** un archivo existente, con preview de la diferencia |
+| Comandos riesgosos | Solo bloqueaba unos pocos patrones extremos | Además pide confirmación para `rm`, `mv`, `git reset`, `sudo`, redirecciones, etc. |
+| Chromium | Ruta absoluta fija de un usuario/máquina | Detección automática multiplataforma (Linux/macOS/Windows), sin rutas fijas |
+| Interfaz | REPL simple | Modos **Plan** (solo lectura) / **Build** (completo), alternables con **Tab**, como en OpenCode |
+
+## Instalación (una sola vez)
+
+```bash
+npm install
+npm link
+```
+
+`npm link` deja el comando `dscode` disponible globalmente en tu sistema,
+apuntando (vía symlink) a esta carpeta — así puedes correrlo desde
+cualquier proyecto sin volver a instalar nada.
+
+```bash
+cp .env.example .env
+```
+
+El `.env.example` ya viene con valores razonables por defecto
+(`MODEL_PROVIDER=web`, `HEADLESS=true`, detección automática de Chromium).
+Solo tócalo si quieres cambiar de proveedor o forzar un Chromium
+específico.
+
+**Login (una sola vez, o cuando la sesión expire):**
+
+```bash
+dscode login
+```
+
+Se abre Chromium visible (siempre, sin importar `HEADLESS`) → inicia
+sesión en DeepSeek → **apaga "Pensamiento Profundo" y "Búsqueda
+inteligente"** si están activados → vuelve a la terminal → ENTER para
+guardar la sesión.
+
+## Uso — desde CUALQUIER proyecto
+
+```bash
+cd ~/mis-proyectos/mi-app
+dscode
+```
+
+Eso es todo. `dscode` detecta que estás parado en `mi-app`, la usa como
+workspace, y busca ahí su `AGENTS.md` y carpetas de convenciones.
+
+Si corres `dscode` desde su propia carpeta de instalación (o cualquier
+subcarpeta de ella), se niega a arrancar — es una protección para que
+nunca pueda modificarse o dañarse a sí mismo:
+
+```
+⛔ No se puede usar dscode sobre su propia carpeta de instalación...
+```
+
+## Modos: Plan vs Build
+
+Al arrancar, `dscode` empieza en modo **Build** (acceso completo:
+lee, escribe, ejecuta comandos). Presiona **Tab** en cualquier momento
+para alternar a modo **Plan** (solo lectura: puede investigar el proyecto,
+leer archivos y buscar código, pero no puede escribir ni ejecutar nada).
+
+```
+[BUILD] mi-app > explica cómo está armado el sistema de auth
+```
+Tab ↓
+```
+[PLAN] mi-app > explica cómo está armado el sistema de auth
+```
+
+Útil para pedirle que investigue o proponga un plan sin riesgo de que
+actúe de una, y luego pasar a Build cuando ya confirmaste que sí quieres
+que haga los cambios.
+
+También puedes arrancar directo en modo Plan:
+
+```bash
+dscode --plan
+```
+
+## Contexto del proyecto: AGENTS.md y carpetas de convenciones
+
+`dscode` busca y lee automáticamente, en el proyecto donde lo corres:
+
+1. **`AGENTS.md`** en la raíz — el contexto principal.
+2. **`AGENTS.md` anidados** en subcarpetas (hasta 3 niveles) — convenciones
+   específicas de esa parte del proyecto.
+3. **Cualquier `.md`** dentro de una carpeta `.agent/`, `agents/`, o
+   `.deepseek/` — reglas, skills, contexto adicional, organizado como
+   quieras dentro de esas carpetas.
+
+Tienes plantillas de ejemplo en `templates/` de esta instalación —
+cópialas a la raíz de tu proyecto (no aquí):
+
+```bash
+cp /ruta/a/dscode/templates/AGENTS.md.example ~/mi-proyecto/AGENTS.md
+cp -r /ruta/a/dscode/templates/.agent ~/mi-proyecto/.agent
+```
+
+Al arrancar, `dscode` te muestra en pantalla exactamente qué archivos de
+contexto encontró y cargó — nunca hay duda de si "vio" o no tus reglas:
+
+```
+Contexto cargado (3 archivo(s)):
+  - AGENTS.md
+  - src/api/AGENTS.md
+  - .agent/skills/convencion-commits.md
+```
+
+Si no encuentra nada, te avisa con una advertencia — el agente puede
+seguir funcionando, pero sin contexto específico del proyecto tiene más
+probabilidad de equivocarse en convenciones que no puede adivinar.
+
+## Seguridad y uso correcto de las tools
+
+- **Aislamiento de proyecto**: las tools de archivos están limitadas al
+  workspace actual (protección contra escapes tipo `../../otra-carpeta`,
+  incluyendo el típico bug de `"/x-evil".startsWith("/x")`), y además el
+  programa entero se niega a correr sobre su propia carpeta.
+- **Confirmación antes de sobrescribir**: si `write_file` apunta a un
+  archivo que YA EXISTE, se muestra un resumen de la diferencia (líneas
+  antes/después, primera línea distinta) y se pide confirmación y/n antes
+  de aplicar el cambio. Crear un archivo nuevo no pide confirmación (es
+  aditivo, no destructivo).
+- **Confirmación en comandos riesgosos**: `run_command` pide confirmación
+  para patrones como `rm`, `mv`, `git reset`, `git checkout --`, `sudo`,
+  `chmod`, redirecciones (`>`), etc. Comandos de solo lectura (`ls`,
+  `git status`, `npm test`) corren directo.
+- **Modo Plan** como red de seguridad adicional: en Plan, las tools de
+  escritura ni siquiera se le ofrecen al modelo — y si de todos modos
+  intenta usarlas (más probable en modo scraping, donde el tool-calling
+  es emulado y menos confiable que uno real), se rechazan explícitamente.
+
+## Estructura
+
+```
+dscode/                       <- instalación del programa (NUNCA se toca a sí mismo)
+  package.json                 <- bin: "dscode" (usar con npm link)
+  .env                          <- config del PROGRAMA (proveedor, chromium, etc.)
+  storage-state.json             <- sesión del navegador (se genera con "dscode login")
+  templates/                      <- AGENTS.md.example y .agent/ de ejemplo, PARA COPIAR a tus proyectos
+  src/
+    cli.js                        <- punto de entrada: resuelve workspace=cwd, guard de auto-protección, banner
+    agent.js                       <- loop del agente, con modos Plan/Build
+    contextLoader.js                 <- lee AGENTS.md (raíz+anidados) + .agent//agents//.deepseek/
+    ui/
+      promptLoop.js                   <- input en modo raw, Tab alterna Plan/Build
+      confirm.js                       <- confirmaciones y/n para operaciones riesgosas
+    providers/
+      index.js                          <- factory: API real vs scraping
+      webClient.js                       <- Playwright directo, sin HTTP
+      toolProtocol.js
+    browser/
+      session.js
+      selectors.js
+      login.js
+      findChromium.js                     <- detección multiplataforma, sin rutas de usuario fijas
+    tools/                                  <- read_file, write_file (con confirmación), list_directory, run_command (con confirmación), search_files
+    safePath.js
+```
+
+## Problemas comunes (modo web)
+
+- **"⛔ No se puede usar dscode sobre su propia carpeta..."**: es
+  intencional. `cd` a tu proyecto real antes de correr `dscode`, o usa
+  `dscode --dir /ruta/a/tu/proyecto`.
+- **No detecta mi AGENTS.md**: confirma que estás corriendo `dscode`
+  desde (o apuntando con `--dir` a) la carpeta que realmente contiene el
+  `AGENTS.md` — revisa el banner de arranque, te dice exactamente qué
+  workspace está usando.
+- **"Pensamiento Profundo"/"Búsqueda inteligente"**: desactívalos en la
+  UI de DeepSeek durante `dscode login` — alargan las respuestas y meten
+  texto que rompe el parseo del bloque de tool-call.
+- **Aparece un reto de Cloudflare**: corre `dscode login` de nuevo (abre
+  visible siempre) y resuélvelo a mano ahí.
+- **No encuentra Chromium**: revisa el log `[config] Chromium: ...` al
+  arrancar — te dice si detectó uno del sistema o si va a usar el de
+  Playwright. Si no tienes ninguno instalado, instala Chrome/Chromium
+  normalmente en tu sistema, o descarga el de Playwright manualmente y
+  apunta `CHROMIUM_EXECUTABLE_PATH` (puede ser relativa a esta carpeta).
+- **Sesión expirada**: `dscode login` de nuevo.
+
+## Limitaciones conocidas
+
+- El input de terminal (`ui/promptLoop.js`) es un editor de línea mínimo:
+  soporta escribir, borrar con backspace, Enter y Tab. No soporta mover el
+  cursor con flechas dentro de la línea ni pegar texto multi-línea — para
+  eso haría falta una librería de UI de terminal completa, que se dejó
+  fuera a propósito para no sumar dependencias pesadas.
+- El modo scraping sigue siendo scraping: frágil ante cambios de UI de
+  DeepSeek y sujeto a sus retos anti-bot. El modo `MODEL_PROVIDER=api` no
+  tiene ninguna de estas limitaciones.
