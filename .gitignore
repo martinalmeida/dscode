@@ -9,6 +9,10 @@ storage-state.json
 chrome-linux64/
 chrome/
 
+# build
+dist/
+build/
+
 # OS / editor
 .DS_Store
 Thumbs.db
