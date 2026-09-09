@@ -88,7 +88,8 @@ export class Agent {
           // modelo, si de todos modos "alucina" un intento de usarla (más
           // probable en modo scraping, donde el tool-calling es emulado
           // por prompting y menos confiable), la rechazamos igual.
-          result = `Tool "${name}" no disponible en modo Plan (solo lectura). ` +
+          result =
+            `Tool "${name}" no disponible en modo Plan (solo lectura). ` +
             `Pídele al usuario que cambie a modo Build (Tab) si de verdad hace falta escribir o ejecutar algo.`;
         } else {
           try {

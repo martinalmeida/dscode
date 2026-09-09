@@ -18,7 +18,8 @@ export const schema = {
         },
         path: {
           type: "string",
-          description: "Carpeta donde buscar, relativa al workspace. Por defecto '.' (todo el proyecto).",
+          description:
+            "Carpeta donde buscar, relativa al workspace. Por defecto '.' (todo el proyecto).",
         },
       },
       required: ["pattern"],

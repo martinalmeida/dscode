@@ -10,12 +10,7 @@ import { SELECTORS } from "./selectors.js";
  * (providers/webClient.js) crea y guarda esta sesión una sola vez.
  */
 export async function createSession(config) {
-  const {
-    chatUrl,
-    headless,
-    storageStatePath,
-    chromiumExecutablePath,
-  } = config;
+  const { chatUrl, headless, storageStatePath, chromiumExecutablePath } = config;
 
   if (chromiumExecutablePath && !fs.existsSync(chromiumExecutablePath)) {
     throw new Error(
@@ -77,6 +72,10 @@ async function checkForCloudflareChallenge(page) {
  * respuesta). Sirve para que el llamador marque ese mensaje como "ya
  * enviado" incluso si luego falla la espera de la respuesta — así un
  * reintento no vuelve a escribir el mismo texto por segunda vez.
+ *
+ * @param {any} session
+ * @param {string} text
+ * @param {{ onSubmitted?: () => void }} [options]
  */
 export async function sendMessage(session, text, { onSubmitted } = {}) {
   const { page } = session;
@@ -146,9 +145,7 @@ export async function resumeReadResponse(session) {
   const messages = page.locator(SELECTORS.assistantMessage);
   const total = await messages.count();
   if (total === 0) {
-    throw new Error(
-      "resumeReadResponse: no hay ningún mensaje de asistente que leer todavía."
-    );
+    throw new Error("resumeReadResponse: no hay ningún mensaje de asistente que leer todavía.");
   }
 
   await waitForResponseToFinish(page, total - 1, session.config.responseTimeoutMs);

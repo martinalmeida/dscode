@@ -1,5 +1,15 @@
-import { createSession, sendMessage, resumeReadResponse, startNewChat, closeSession } from "../browser/session.js";
-import { buildToolInstructions, parseModelResponse, formatToolResultMessage } from "./toolProtocol.js";
+import {
+  createSession,
+  sendMessage,
+  resumeReadResponse,
+  startNewChat,
+  closeSession,
+} from "../browser/session.js";
+import {
+  buildToolInstructions,
+  parseModelResponse,
+  formatToolResultMessage,
+} from "./toolProtocol.js";
 
 /**
  * Imita la forma del SDK de OpenAI: `client.chat.completions.create(...)`.
@@ -40,7 +50,8 @@ export class DeepSeekWebClient {
   async _createCompletion({ messages, tools }) {
     const session = await this._getSession();
 
-    const isFreshConversation = session.historyLength === 0 || messages.length <= session.historyLength;
+    const isFreshConversation =
+      session.historyLength === 0 || messages.length <= session.historyLength;
 
     let rawResponse;
 
@@ -49,7 +60,9 @@ export class DeepSeekWebClient {
         await startNewChat(session);
       }
       const toolInstructions = buildToolInstructions(tools);
-      const body = messages.map((m) => `[${m.role.toUpperCase()}]\n${m.content ?? ""}`).join("\n\n");
+      const body = messages
+        .map((m) => `[${m.role.toUpperCase()}]\n${m.content ?? ""}`)
+        .join("\n\n");
       const textToSend = toolInstructions ? `${body}\n\n${toolInstructions}` : body;
 
       rawResponse = await sendMessage(session, textToSend, {

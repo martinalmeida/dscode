@@ -18,8 +18,7 @@ export function resolveSafe(workspaceDir, relativePath) {
 
   if (!isSameDir && !isInsideDir) {
     throw new Error(
-      `Ruta fuera del workspace permitido: "${relativePath}". ` +
-        `Workspace: ${base}`
+      `Ruta fuera del workspace permitido: "${relativePath}". ` + `Workspace: ${base}`
     );
   }
   return target;

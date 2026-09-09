@@ -1,4 +1,5 @@
 import readline from "node:readline";
+import { printUserBubble } from "./bubble.js";
 
 const COLORS = {
   reset: "\x1b[0m",
@@ -68,6 +69,9 @@ export function startPromptLoop({ projectName, initialMode, onSubmit, onExit }) 
         redraw();
         return;
       }
+
+      // Eco del usuario con fondo sutil separado (burbuja)
+      printUserBubble(line);
 
       busy = true;
       try {

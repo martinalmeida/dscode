@@ -9,6 +9,8 @@ import { createModelClient } from "./providers/index.js";
 import { loadProjectContext } from "./contextLoader.js";
 import { Agent } from "./agent.js";
 import { printBanner } from "./ui/banner.js";
+import { createSpinner } from "./ui/spinner.js";
+import { printAgentBubble, printToolCall, printToolResult, printErrorBubble } from "./ui/bubble.js";
 import { startPromptLoop } from "./ui/promptLoop.js";
 
 // AGENT_INSTALL_DIR = carpeta real donde vive ESTE programa (resolviendo
@@ -20,7 +22,9 @@ const AGENT_INSTALL_DIR = fs.realpathSync(path.resolve(path.dirname(__filename),
 
 dotenv.config({ path: path.join(AGENT_INSTALL_DIR, ".env") });
 
-const PACKAGE_JSON = JSON.parse(fs.readFileSync(path.join(AGENT_INSTALL_DIR, "package.json"), "utf-8"));
+const PACKAGE_JSON = JSON.parse(
+  fs.readFileSync(path.join(AGENT_INSTALL_DIR, "package.json"), "utf-8")
+);
 const PRODUCT_NAME = "dscode";
 
 async function main() {
@@ -69,6 +73,9 @@ async function runAgentSession() {
     process.exit(1);
   }
 
+  // spinner compartido entre onEvent y onSubmit (pausa durante tool logs)
+  let activeSpinner = null;
+
   const agent = new Agent({
     client,
     model: process.env.DEEPSEEK_MODEL,
@@ -77,13 +84,17 @@ async function runAgentSession() {
     mode: initialMode,
     onEvent: (event) => {
       if (event.type === "tool_call") {
-        console.log(`\n[tool] -> ${event.name}(${event.args})`);
+        activeSpinner?.pause();
+        printToolCall(event.name, event.args);
+        activeSpinner?.resume(`Ejecutando ${event.name}`);
       } else if (event.type === "tool_result") {
+        activeSpinner?.pause();
         const preview =
           typeof event.result === "string" && event.result.length > 300
             ? event.result.slice(0, 300) + "..."
             : event.result;
-        console.log(`[tool] <- ${event.name}: ${preview}\n`);
+        printToolResult(event.name, preview);
+        activeSpinner?.resume("Consultando DeepSeek");
       }
     },
   });
@@ -92,15 +103,15 @@ async function runAgentSession() {
   console.log("Modo: BUILD (completo) / PLAN (solo lectura) — Tab para alternar.");
   console.log("Ctrl+C para salir.\n");
 
-  let loop;
   const shutdown = async () => {
-    loop?.stop();
+    loop.stop();
     await agent.close();
     console.log("\nHasta luego.");
     process.exit(0);
   };
 
-  loop = startPromptLoop({
+  /** @type {ReturnType<typeof startPromptLoop>} */
+  const loop = startPromptLoop({
     projectName,
     initialMode,
     onExit: shutdown,
@@ -112,11 +123,20 @@ async function runAgentSession() {
       }
 
       agent.setMode(currentMode);
+      const spinner = createSpinner();
+      activeSpinner = spinner;
+      spinner.start("Consultando DeepSeek");
       try {
         const respuesta = await agent.run(line);
-        console.log(`\n${respuesta}\n`);
+        spinner.stop();
+        activeSpinner = null;
+        if (respuesta && String(respuesta).trim()) {
+          printAgentBubble(String(respuesta).trim());
+        }
       } catch (err) {
-        console.error(`\nError: ${err.message}\n`);
+        spinner.stop();
+        activeSpinner = null;
+        printErrorBubble(err.message);
       }
     },
   });

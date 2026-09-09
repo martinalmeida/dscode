@@ -1,0 +1,8 @@
+node_modules
+chrome-linux64
+chrome
+dist
+build
+.next
+.cache
+storage-state.json

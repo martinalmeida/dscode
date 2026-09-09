@@ -13,9 +13,12 @@ npm run calibrate    # = dscode calibrate
 dscode               # corre en proyecto actual (Build por defecto)
 dscode --plan        # inicia en modo solo-lectura
 dscode --dir <ruta>  # fuerza workspace distinto a cwd
+npm run lint         # revisa reglas con ESLint
+npm run typecheck    # chequeo de tipos con tsc
+npm run format       # formatea código con Prettier
 ```
 
-No hay tests, linter ni CI configurados.
+Linting con ESLint + Prettier y validación de tipos con TypeScript (`tsc --noEmit`).
 
 ## Arquitectura
 

@@ -3,6 +3,9 @@ import { chromium } from "playwright";
 import { getEnvString } from "../envUtils.js";
 import { findChromium } from "./findChromium.js";
 
+/**
+ * @param {{ calibrate?: boolean; agentInstallDir?: string }} [options]
+ */
 export async function runLogin({ calibrate = false, agentInstallDir } = {}) {
   const CHAT_URL = getEnvString("CHAT_URL", "https://chat.deepseek.com/");
   // Igual que en providers/index.js: SIEMPRE relativo a agentInstallDir,
@@ -21,7 +24,9 @@ export async function runLogin({ calibrate = false, agentInstallDir } = {}) {
       ? "Modo calibración: usa DevTools (F12) para revisar los selectores en src/browser/selectors.js.\n"
       : "Modo login: inicia sesión manualmente en la ventana que se va a abrir.\n"
   );
-  console.log(`Chromium: ${chromiumInfo.executablePath || "(propio de Playwright)"} — origen: ${chromiumInfo.source}`);
+  console.log(
+    `Chromium: ${chromiumInfo.executablePath || "(propio de Playwright)"} — origen: ${chromiumInfo.source}`
+  );
 
   const browser = await chromium.launch({
     headless: false, // SIEMPRE visible aquí, es login manual
@@ -37,10 +42,14 @@ export async function runLogin({ calibrate = false, agentInstallDir } = {}) {
   console.log("2. Espera a que cargue la pantalla del chat.");
   console.log('3. Si tienes "Pensamiento Profundo" o "Búsqueda inteligente" activados, apágalos.');
   if (calibrate) {
-    console.log("4. Abre DevTools (F12), manda un mensaje de prueba y anota los selectores reales.");
+    console.log(
+      "4. Abre DevTools (F12), manda un mensaje de prueba y anota los selectores reales."
+    );
     console.log("5. Actualiza src/browser/selectors.js con lo que encuentres.");
   }
-  console.log("\nCuando termines, vuelve aquí a la terminal y presiona ENTER para guardar la sesión...");
+  console.log(
+    "\nCuando termines, vuelve aquí a la terminal y presiona ENTER para guardar la sesión..."
+  );
 
   await new Promise((resolve) => {
     process.stdin.once("data", resolve);

@@ -67,10 +67,7 @@ function getCandidatePaths(platform) {
     return [
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       "/Applications/Chromium.app/Contents/MacOS/Chromium",
-      path.join(
-        os.homedir(),
-        "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-      ),
+      path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
     ];
   }
 

@@ -77,7 +77,7 @@ export function parseModelResponse(rawText) {
       name: parsed.name,
       arguments: parsed.arguments || {},
     };
-  } catch (err) {
+  } catch {
     // El modelo mandó un bloque mal formado; lo tratamos como texto normal
     // para no tronar el loop del agente.
     return { isToolCall: false, content: rawText.trim() };

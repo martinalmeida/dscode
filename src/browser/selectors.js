@@ -51,21 +51,21 @@ export const SELECTORS = {
   // algo como:
   //   assistantMessage: '.ds-markdown:not(.ds-markdown .ds-markdown)'
   // (selecciona solo los que NO están dentro de otro .ds-markdown)
-  assistantMessage: '.ds-markdown',
+  assistantMessage: ".ds-markdown",
 
   // SIN CONFIRMAR: no se pudo ver porque no había generación en curso.
   // El botón de enviar probablemente cambia de ícono (avión -> stop)
   // en vez de ser un botón nuevo. Por eso browserSession.js NO depende
   // solo de esto: si no lo encuentra, usa un fallback de polling que mide
   // si el texto de la respuesta dejó de crecer.
-  stopGeneratingButton: 'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle.ds-button--loading',
+  stopGeneratingButton:
+    'div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle.ds-button--loading',
 
   // CONFIRMADO: es un <div> con texto "Nuevo chat" (no un <button> real).
-  newChatButton: 'text=Nuevo chat',
+  newChatButton: "text=Nuevo chat",
 
   // CONFIRMADO Y CRÍTICO: overlay de reto Cloudflare Turnstile. Si esto
   // se vuelve visible, Playwright NO puede resolverlo solo — hay que
   // pausar y resolverlo manualmente en una ventana visible (HEADLESS=false).
-  cloudflareChallenge: '#cf-overlay',
+  cloudflareChallenge: "#cf-overlay",
 };
-

@@ -11,7 +11,7 @@ export function createModelClient({ agentInstallDir }) {
     const apiKey = getEnvString("DEEPSEEK_API_KEY");
     if (!apiKey) {
       throw new Error(
-        'MODEL_PROVIDER=api requiere DEEPSEEK_API_KEY en tu .env (sácala en platform.deepseek.com).'
+        "MODEL_PROVIDER=api requiere DEEPSEEK_API_KEY en tu .env (sácala en platform.deepseek.com)."
       );
     }
     return new OpenAI({
