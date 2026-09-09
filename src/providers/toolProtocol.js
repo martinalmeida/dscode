@@ -40,8 +40,8 @@ export function buildToolInstructions(tools) {
     "Herramientas:",
     toolsDescription,
     "",
-    "Si NO necesitas ninguna herramienta, responde normalmente en texto, sin el bloque de arriba.",
-    "Cuando te llegue un resultado de herramienta (verás 'Resultado de la herramienta:' en el mensaje), úsalo para continuar o dar tu respuesta final.",
+    "Si NO necesitas ninguna herramienta, responde en texto breve y directo (LÍMITE ESTRICTO: máx 3-5 frases o 5 viñetas), sin el bloque de arriba.",
+    "Cuando te llegue un resultado de herramienta (verás 'Resultado de la herramienta:' en el mensaje), úsalo para continuar o dar tu respuesta final — también breve (1-2 líneas de confirmación).",
     "=== FIN HERRAMIENTAS ===",
   ].join("\n");
 }

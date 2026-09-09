@@ -14,7 +14,6 @@ export function createModelClient({ agentInstallDir }) {
         'MODEL_PROVIDER=api requiere DEEPSEEK_API_KEY en tu .env (sácala en platform.deepseek.com).'
       );
     }
-    console.log("[config] MODEL_PROVIDER=api");
     return new OpenAI({
       apiKey,
       baseURL: getEnvString("DEEPSEEK_API_BASE_URL", "https://api.deepseek.com"),
@@ -44,11 +43,6 @@ export function createModelClient({ agentInstallDir }) {
       responseTimeoutMs: getEnvNumber("RESPONSE_TIMEOUT_MS", 300000),
       chromiumExecutablePath: chromium.executablePath,
     };
-
-    console.log("[config] MODEL_PROVIDER=web");
-    console.log(`[config] HEADLESS=${config.headless} (${config.headless ? "Chromium oculto" : "Chromium visible"})`);
-    console.log(`[config] Chromium: ${config.chromiumExecutablePath || "(propio de Playwright)"} — origen: ${chromium.source}`);
-    console.log(`[config] CHAT_URL=${config.chatUrl}`);
 
     return new DeepSeekWebClient(config);
   }

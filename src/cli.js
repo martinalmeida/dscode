@@ -8,6 +8,7 @@ import { runLogin } from "./browser/login.js";
 import { createModelClient } from "./providers/index.js";
 import { loadProjectContext } from "./contextLoader.js";
 import { Agent } from "./agent.js";
+import { printBanner } from "./ui/banner.js";
 import { startPromptLoop } from "./ui/promptLoop.js";
 
 // AGENT_INSTALL_DIR = carpeta real donde vive ESTE programa (resolviendo
@@ -44,6 +45,7 @@ async function runAgentSession() {
   const projectName = await detectProjectName(workspaceDir);
   const initialMode = process.argv.includes("--plan") ? "plan" : "build";
 
+  printBanner();
   console.log(`\n${PRODUCT_NAME} v${PACKAGE_JSON.version}`);
   console.log(`Proyecto: ${projectName}`);
   console.log(`Workspace: ${workspaceDir}\n`);
