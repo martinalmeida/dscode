@@ -12,7 +12,8 @@ export class ToolRegistry {
   }
 
   register(def: ToolDefinition): void {
-    if (this.frozen) throw new Error(`ToolRegistry congelado — no se puede registrar "${def.name}" tras freeze()`);
+    if (this.frozen)
+      throw new Error(`ToolRegistry congelado — no se puede registrar "${def.name}" tras freeze()`);
     if (this.tools.has(def.name)) {
       log.warn({ tool: def.name }, `Tool duplicada "${def.name}" — se ignora registro posterior`);
       return;
@@ -25,16 +26,27 @@ export class ToolRegistry {
     log.debug({ tool: def.name, readOnly: def.readOnly }, "Tool registrada");
   }
 
-  registerAll(defs: ToolDefinition[]): void { for (const d of defs) this.register(d); }
+  registerAll(defs: ToolDefinition[]): void {
+    for (const d of defs) this.register(d);
+  }
 
-  get(name: string): ToolDefinition | undefined { return this.tools.get(name); }
+  get(name: string): ToolDefinition | undefined {
+    return this.tools.get(name);
+  }
 
-  getAll(): ToolDefinition[] { return [...this.tools.values()]; }
+  getAll(): ToolDefinition[] {
+    return [...this.tools.values()];
+  }
 
-  getSchemas(): Array<ToolDefinition["schema"]> { return this.getAll().map((t) => t.schema); }
+  getSchemas(): Array<ToolDefinition["schema"]> {
+    return this.getAll().map((t) => t.schema);
+  }
 
   getSchemasForMode(mode: ToolMode): Array<ToolDefinition["schema"]> {
-    if (mode === "plan") return this.getAll().filter((t) => t.readOnly).map((t) => t.schema);
+    if (mode === "plan")
+      return this.getAll()
+        .filter((t) => t.readOnly)
+        .map((t) => t.schema);
     return this.getSchemas();
   }
 
@@ -42,7 +54,11 @@ export class ToolRegistry {
     return Object.fromEntries(this.getAll().map((t) => [t.name, t.execute.bind(t)]));
   }
 
-  has(name: string): boolean { return this.tools.has(name); }
+  has(name: string): boolean {
+    return this.tools.has(name);
+  }
 
-  size(): number { return this.tools.size; }
+  size(): number {
+    return this.tools.size;
+  }
 }

@@ -16,7 +16,8 @@ export function printUserBubble(text: string): void {
   const content = String(text ?? "");
   const lines = content.split("\n");
   const rendered = lines.map((l, i) => {
-    const prefix = i === 0 ? `${FG_USER_PREFIX} ● Tú: ${FG_WHITE}` : `${FG_USER_PREFIX} │ ${FG_WHITE}`;
+    const prefix =
+      i === 0 ? `${FG_USER_PREFIX} ● Tú: ${FG_WHITE}` : `${FG_USER_PREFIX} │ ${FG_WHITE}`;
     return `${prefix}${l} `;
   });
   console.log("");

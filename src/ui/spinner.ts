@@ -22,18 +22,29 @@ export function createSpinner() {
       if (timer) clearInterval(timer);
       timer = setInterval(render, 220);
     },
-    setMessage(msg: string): void { currentMsg = msg; },
+    setMessage(msg: string): void {
+      currentMsg = msg;
+    },
     pause(): void {
-      if (timer) { clearInterval(timer); timer = null; process.stdout.write("\r\x1b[K"); }
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+        process.stdout.write("\r\x1b[K");
+      }
     },
     resume(msg?: string): void {
       if (msg) currentMsg = msg;
       if (!process.stdout.isTTY) return;
       if (timer) clearInterval(timer);
-      tick = 0; render(); timer = setInterval(render, 220);
+      tick = 0;
+      render();
+      timer = setInterval(render, 220);
     },
     stop(): void {
-      if (timer) { clearInterval(timer); timer = null; }
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
       process.stdout.write("\r\x1b[K");
     },
   };

@@ -9,7 +9,11 @@ function normalizeContent(content: string, relPath: string): string {
   const hasReal = content.includes("\n");
   // Si solo tiene \n literales (caso bug 1 línea), convertir a saltos reales
   if (hasLiteral && !hasReal) {
-    const unescaped = content.replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t").replace(/\\"/g, '"');
+    const unescaped = content
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, '"');
     // Si tras unescape hay HTML indentable, lo dejamos; prettier lo formateará después
     return unescaped;
   }
@@ -45,35 +49,63 @@ async function formatWithPrettier(content: string, relPath: string): Promise<str
   if (content.split("\n").length < 3) return content;
   try {
     const prettier = await import("prettier");
-    const formatted = await (prettier as unknown as { format: (c: string, o: unknown) => Promise<string> }).format(content, { parser, tabWidth: 2, useTabs: false, semi: true, singleQuote: false });
+    const formatted = await (
+      prettier as unknown as { format: (c: string, o: unknown) => Promise<string> }
+    ).format(content, { parser, tabWidth: 2, useTabs: false, semi: true, singleQuote: false });
     return formatted;
-  } catch (_e) { void _e; return content; }
+  } catch (_e) {
+    void _e;
+    return content;
+  }
 }
 
 export const writeFileTool: ToolDefinition<{ path: string; content: string }> = {
   name: "write_file",
-  description: "Crea o sobrescribe un archivo de texto dentro del workspace con indentación humana (2 espacios, cada tag/bloque en línea separada). Requiere SIEMPRE {path, content} no vacíos. Normaliza \\n literales a saltos reales y crea carpetas intermedias si no existen. Usa edit_file para cambios parciales.",
+  description:
+    "Crea o sobrescribe un archivo de texto dentro del workspace con indentación humana (2 espacios, cada tag/bloque en línea separada). Requiere SIEMPRE {path, content} no vacíos. Normaliza \\n literales a saltos reales y crea carpetas intermedias si no existen. Usa edit_file para cambios parciales.",
   readOnly: false,
   schema: {
     type: "function",
     function: {
       name: "write_file",
-      description: "Crea o sobrescribe un archivo de texto dentro del workspace con indentación humana (2 espacios). Requiere SIEMPRE {path, content} no vacíos. Normaliza \\n literales a saltos reales y crea carpetas intermedias si no existen.",
-      parameters: { type: "object", properties: { path: { type: "string", description: "Ruta del archivo, relativa a la raíz del workspace. Obligatorio, no vacío. Ej: \"hola.md\" o \"docs/nota.md\"." }, content: { type: "string", description: "Contenido completo a escribir en el archivo con indentación a 2 espacios (no minificado, cada tag en línea separada). Obligatorio (puede ser \"\" si quieres archivo vacío). Los \\n se convierten en saltos reales." } }, required: ["path","content"] },
+      description:
+        "Crea o sobrescribe un archivo de texto dentro del workspace con indentación humana (2 espacios). Requiere SIEMPRE {path, content} no vacíos. Normaliza \\n literales a saltos reales y crea carpetas intermedias si no existen.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description:
+              'Ruta del archivo, relativa a la raíz del workspace. Obligatorio, no vacío. Ej: "hola.md" o "docs/nota.md".',
+          },
+          content: {
+            type: "string",
+            description:
+              'Contenido completo a escribir en el archivo con indentación a 2 espacios (no minificado, cada tag en línea separada). Obligatorio (puede ser "" si quieres archivo vacío). Los \\n se convierten en saltos reales.',
+          },
+        },
+        required: ["path", "content"],
+      },
     },
   },
   async execute({ path: relPath, content }, ctx: ToolContext): Promise<string> {
-    if (typeof relPath !== "string" || !relPath) return 'Faltan argumentos para write_file: "path" es obligatorio y no vacío. Vuelve a llamar a write_file con {"path":"<ruta-relativa>","content":"<texto>"}. Ej: {"path":"hola.md","content":"# Hola\\nhola como estas"}';
-    if (typeof content !== "string") return 'Falta "content" para write_file: es obligatorio (usa "" si quieres archivo vacío). Vuelve a llamar a write_file incluyendo "content". Ej: {"path":"hola.md","content":"# Hola\\nhola como estas"}';
+    if (typeof relPath !== "string" || !relPath)
+      return 'Faltan argumentos para write_file: "path" es obligatorio y no vacío. Vuelve a llamar a write_file con {"path":"<ruta-relativa>","content":"<texto>"}. Ej: {"path":"hola.md","content":"# Hola\\nhola como estas"}';
+    if (typeof content !== "string")
+      return 'Falta "content" para write_file: es obligatorio (usa "" si quieres archivo vacío). Vuelve a llamar a write_file incluyendo "content". Ej: {"path":"hola.md","content":"# Hola\\nhola como estas"}';
     // Normalizar \n literales a saltos reales (fix archivo en 1 línea) antes de cualquier otra cosa
     content = normalizeContent(content, relPath);
     // Formatear con prettier para indentación humana equilibrada (2 espacios)
     content = await formatWithPrettier(content, relPath);
     const full = resolveSafe(ctx.workspaceDir, relPath);
-    if (full === path.resolve(ctx.workspaceDir)) return "Error: la ruta resuelve a la raíz del workspace, no a un archivo.";
-    const existedBefore = await fs.access(full).then(()=>true).catch(()=>false);
+    if (full === path.resolve(ctx.workspaceDir))
+      return "Error: la ruta resuelve a la raíz del workspace, no a un archivo.";
+    const existedBefore = await fs
+      .access(full)
+      .then(() => true)
+      .catch(() => false);
     if (existedBefore) {
-      const previous = await fs.readFile(full,"utf-8").catch(()=> "");
+      const previous = await fs.readFile(full, "utf-8").catch(() => "");
       const preview = buildDiffPreview(previous, content);
       ctx.pauseSpinner?.();
       ctx.pauseInput?.();
@@ -93,8 +125,17 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
 function buildDiffPreview(previous: string, next: string): string {
   const prevLines = previous.split("\n");
   const nextLines = next.split("\n");
-  const summary = [`  Antes: ${prevLines.length} líneas, ${previous.length} caracteres`, `  Después: ${nextLines.length} líneas, ${next.length} caracteres`];
+  const summary = [
+    `  Antes: ${prevLines.length} líneas, ${previous.length} caracteres`,
+    `  Después: ${nextLines.length} líneas, ${next.length} caracteres`,
+  ];
   const maxLines = Math.max(prevLines.length, nextLines.length);
-  for (let i = 0; i < maxLines; i++) if (prevLines[i] !== nextLines[i]) { summary.push(`  Primera diferencia en la línea ${i+1}:`); summary.push(`    - ${prevLines[i] ?? "(sin línea)"}`); summary.push(`    + ${nextLines[i] ?? "(sin línea)"}`); break; }
+  for (let i = 0; i < maxLines; i++)
+    if (prevLines[i] !== nextLines[i]) {
+      summary.push(`  Primera diferencia en la línea ${i + 1}:`);
+      summary.push(`    - ${prevLines[i] ?? "(sin línea)"}`);
+      summary.push(`    + ${nextLines[i] ?? "(sin línea)"}`);
+      break;
+    }
   return summary.join("\n");
 }

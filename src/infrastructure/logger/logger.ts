@@ -1,13 +1,21 @@
 import pino, { type Logger } from "pino";
 
 function resolveLevel(): string {
-  const raw = (process.env.LOG_LEVEL ?? process.env.LOGLEVEL ?? "warn").replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase();
+  const raw = (process.env.LOG_LEVEL ?? process.env.LOGLEVEL ?? "warn")
+    .replace(/\r/g, "")
+    .trim()
+    .replace(/^['"]+|['"]+$/g, "")
+    .toLowerCase();
   const allowed = new Set(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
   return allowed.has(raw) ? raw : "warn";
 }
 
 function shouldUsePretty(): boolean {
-  const envPretty = (process.env.LOG_PRETTY ?? "").replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase();
+  const envPretty = (process.env.LOG_PRETTY ?? "")
+    .replace(/\r/g, "")
+    .trim()
+    .replace(/^['"]+|['"]+$/g, "")
+    .toLowerCase();
   if (["true", "1", "yes", "on", "sí", "si"].includes(envPretty)) return true;
   if (["false", "0", "no", "off"].includes(envPretty)) return false;
   // pretty por defecto en desarrollo (no production) y si hay TTY
@@ -70,7 +78,7 @@ export function getRootLogger(): Logger {
         },
         base: { service: "dscode" },
       },
-      pino.destination({ dest: 2, sync: false }),
+      pino.destination({ dest: 2, sync: false })
     );
   }
 

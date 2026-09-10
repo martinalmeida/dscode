@@ -32,7 +32,12 @@ export class Agent {
   private onEvent: (e: { type: string; name: string; args?: string; result?: string }) => void;
   private messages: Array<Record<string, unknown>> = [];
   private toolLog: ReturnType<typeof createLogger>;
-  private ioControls: { pauseInput?: () => void; resumeInput?: () => void; pauseSpinner?: () => void; resumeSpinner?: (msg?: string) => void } = {};
+  private ioControls: {
+    pauseInput?: () => void;
+    resumeInput?: () => void;
+    pauseSpinner?: () => void;
+    resumeSpinner?: (msg?: string) => void;
+  } = {};
 
   constructor(opts: AgentOpts) {
     this.client = opts.client;
@@ -49,20 +54,29 @@ export class Agent {
     this.mode = mode;
   }
 
-  setIOControls(controls: { pauseInput?: () => void; resumeInput?: () => void; pauseSpinner?: () => void; resumeSpinner?: (msg?: string) => void }): void {
+  setIOControls(controls: {
+    pauseInput?: () => void;
+    resumeInput?: () => void;
+    pauseSpinner?: () => void;
+    resumeSpinner?: (msg?: string) => void;
+  }): void {
     this.ioControls = controls;
   }
 
   init(): void {
     if (this.messages.some((m) => m.role === "system")) return;
-    this.messages.push({ role: "system", content: buildSystemPrompt(this.workspaceDir, this.systemPromptContext) });
+    this.messages.push({
+      role: "system",
+      content: buildSystemPrompt(this.workspaceDir, this.systemPromptContext),
+    });
   }
 
   async run(userInput: string): Promise<string> {
     if (this.messages.length === 0) this.init();
     this.messages.push({ role: "user", content: userInput });
     const allSchemas = toolRegistry.getSchemas();
-    const allowedSchemas = this.mode === "plan" ? toolRegistry.getSchemasForMode("plan") : allSchemas;
+    const allowedSchemas =
+      this.mode === "plan" ? toolRegistry.getSchemasForMode("plan") : allSchemas;
     log.debug({ mode: this.mode, toolCount: allowedSchemas.length }, "run iniciado");
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {

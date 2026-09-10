@@ -10,14 +10,22 @@ export interface SessionConfig {
   responseTimeoutMs: number;
   chromiumExecutablePath?: string;
 }
-export interface Session { browser: import("playwright").Browser; context: import("playwright").BrowserContext; page: import("playwright").Page; historyLength: number; config: SessionConfig; }
+export interface Session {
+  browser: import("playwright").Browser;
+  context: import("playwright").BrowserContext;
+  page: import("playwright").Page;
+  historyLength: number;
+  config: SessionConfig;
+}
 
 const log = createLogger("browser:session");
 
 export async function createSession(config: SessionConfig): Promise<Session> {
   const { chatUrl, headless, storageStatePath, chromiumExecutablePath } = config;
   if (chromiumExecutablePath && !fs.existsSync(chromiumExecutablePath)) {
-    throw new Error(`CHROMIUM_EXECUTABLE_PATH apunta a "${chromiumExecutablePath}" pero ese archivo no existe. Verifica la ruta.`);
+    throw new Error(
+      `CHROMIUM_EXECUTABLE_PATH apunta a "${chromiumExecutablePath}" pero ese archivo no existe. Verifica la ruta.`
+    );
   }
   const launchOptions: { headless: boolean; executablePath?: string } = { headless };
   if (chromiumExecutablePath) launchOptions.executablePath = chromiumExecutablePath;
@@ -34,8 +42,10 @@ export async function createSession(config: SessionConfig): Promise<Session> {
 
 export async function closeSession(session: Session | null | undefined): Promise<void> {
   if (!session) return;
-  if (session.context) await session.context.close().catch((e) => log.warn({ err: e }, "close context failed"));
-  if (session.browser) await session.browser.close().catch((e) => log.warn({ err: e }, "close browser failed"));
+  if (session.context)
+    await session.context.close().catch((e) => log.warn({ err: e }, "close context failed"));
+  if (session.browser)
+    await session.browser.close().catch((e) => log.warn({ err: e }, "close browser failed"));
 }
 
 async function checkForCloudflareChallenge(page: import("playwright").Page): Promise<void> {
@@ -44,10 +54,17 @@ async function checkForCloudflareChallenge(page: import("playwright").Page): Pro
     log.debug({ err: e }, "cloudflare check failed");
     return false;
   });
-  if (isVisible) throw new Error("Apareció el reto de Cloudflare (Turnstile) en DeepSeek. Si el navegador está visible (HEADLESS=false), resuélvelo manualmente y vuelve a intentar. Si está en headless, considera correr con HEADLESS=false.");
+  if (isVisible)
+    throw new Error(
+      "Apareció el reto de Cloudflare (Turnstile) en DeepSeek. Si el navegador está visible (HEADLESS=false), resuélvelo manualmente y vuelve a intentar. Si está en headless, considera correr con HEADLESS=false."
+    );
 }
 
-export async function sendMessage(session: Session, text: string, opts: { onSubmitted?: () => void } = {}): Promise<string> {
+export async function sendMessage(
+  session: Session,
+  text: string,
+  opts: { onSubmitted?: () => void } = {}
+): Promise<string> {
   const { page } = session;
   await checkForCloudflareChallenge(page);
   const textarea = page.locator(SELECTORS.textarea).first();
@@ -55,6 +72,17 @@ export async function sendMessage(session: Session, text: string, opts: { onSubm
   await textarea.click();
   await textarea.fill(text);
   const countBefore = await page.locator(SELECTORS.assistantMessage).count();
+  let initialLastText = "";
+  if (countBefore > 0) {
+    try {
+      initialLastText = await page
+        .locator(SELECTORS.assistantMessage)
+        .nth(countBefore - 1)
+        .innerText();
+    } catch (_e) {
+      void _e;
+    }
+  }
   const sendButton = page.locator(SELECTORS.sendButton).first();
   const hasSendButton = (await sendButton.count()) > 0;
   if (hasSendButton) {
@@ -71,11 +99,19 @@ export async function sendMessage(session: Session, text: string, opts: { onSubm
     await sendButton.click();
   } else await textarea.press("Enter");
   if (opts.onSubmitted) opts.onSubmitted();
-  await waitForResponseToFinish(page, countBefore, session.config.responseTimeoutMs);
+  await waitForResponseToFinish(
+    page,
+    countBefore,
+    session.config.responseTimeoutMs,
+    initialLastText
+  );
   await checkForCloudflareChallenge(page);
   const messages = page.locator(SELECTORS.assistantMessage);
   const total = await messages.count();
-  if (total === 0) throw new Error("No se encontró ningún mensaje de asistente en la página. Revisa selectors.ts (assistantMessage) — probablemente cambió.");
+  if (total === 0)
+    throw new Error(
+      "No se encontró ningún mensaje de asistente en la página. Revisa selectors.ts (assistantMessage) — probablemente cambió."
+    );
   const lastMessage = messages.nth(total - 1);
   return await lastMessage.innerText();
 }
@@ -85,15 +121,32 @@ export async function resumeReadResponse(session: Session): Promise<string> {
   await checkForCloudflareChallenge(page);
   const messages = page.locator(SELECTORS.assistantMessage);
   const total = await messages.count();
-  if (total === 0) throw new Error("resumeReadResponse: no hay ningún mensaje de asistente que leer todavía.");
-  await waitForResponseToFinish(page, total - 1, session.config.responseTimeoutMs);
+  if (total === 0)
+    throw new Error("resumeReadResponse: no hay ningún mensaje de asistente que leer todavía.");
+  let initialLastText = "";
+  if (total > 0) {
+    try {
+      initialLastText = await page
+        .locator(SELECTORS.assistantMessage)
+        .nth(total - 1)
+        .innerText();
+    } catch (_e) {
+      void _e;
+    }
+  }
+  await waitForResponseToFinish(page, total - 1, session.config.responseTimeoutMs, initialLastText);
   await checkForCloudflareChallenge(page);
   const finalTotal = await messages.count();
   const lastMessage = messages.nth(finalTotal - 1);
   return await lastMessage.innerText();
 }
 
-async function waitForResponseToFinish(page: import("playwright").Page, countBefore: number, responseTimeoutMs: number): Promise<void> {
+async function waitForResponseToFinish(
+  page: import("playwright").Page,
+  countBefore: number,
+  responseTimeoutMs: number,
+  initialLastText = ""
+): Promise<void> {
   const stopButton = page.locator(SELECTORS.stopGeneratingButton).first();
   try {
     await stopButton.waitFor({ state: "visible", timeout: 5000 });
@@ -106,9 +159,16 @@ async function waitForResponseToFinish(page: import("playwright").Page, countBef
   let lastLength = -1;
   let stableChecks = 0;
   let lastCount = countBefore;
-  let initialLastText = "";
-  if (countBefore > 0) {
-    try { initialLastText = await page.locator(SELECTORS.assistantMessage).nth(countBefore - 1).innerText(); } catch (_e) { void _e; }
+  // initialLastText ya capturado ANTES del click (evita carrera si DeepSeek reusa div) — si no vino, capturar ahora como fallback
+  if (!initialLastText && countBefore > 0) {
+    try {
+      initialLastText = await page
+        .locator(SELECTORS.assistantMessage)
+        .nth(countBefore - 1)
+        .innerText();
+    } catch (_e) {
+      void _e;
+    }
   }
   while (Date.now() - start < responseTimeoutMs) {
     await checkForCloudflareChallenge(page);
@@ -118,45 +178,133 @@ async function waitForResponseToFinish(page: import("playwright").Page, countBef
       log.debug({ countBefore, count, lastLength }, "assistantMessage count changed");
       lastCount = count;
     }
-    // Detectar tanto mensaje nuevo (count > countBefore) como mutación del último (DeepSeek reusa el div y edita el texto)
-    if (count > countBefore || (count > 0 && count === countBefore)) {
+    // Detectar mensaje nuevo, mutación o re-render (count puede bajar 3→2 si .ds-markdown es volátil)
+    if (count > 0) {
       let text = "";
-      try { text = await messages.nth(count - 1).innerText(); } catch (_e) { void _e; }
-      const isNewMessage = count > countBefore;
-      const isMutated = count === countBefore && text !== initialLastText;
-      // Si no hay mutación ni mensaje nuevo, no es respuesta nueva → seguir esperando
+      try {
+        text = await messages.nth(count - 1).innerText();
+      } catch (_e) {
+        void _e;
+      }
+      const isNewMessage = count !== countBefore;
+      const isMutated = text !== initialLastText;
+      // Si no hay cambio de count ni mutación y el texto ya era el inicial, no es respuesta nueva
       if (!isNewMessage && !isMutated) {
-        // nada que hacer, seguir loop
+        // nada que hacer, seguir loop (evita falsos positivos con texto inicial idéntico)
       } else {
         const norm = text.replace(/\u00A0/g, " ");
-        const hasToolCall = norm.includes("<<<TOOL_CALL>>>") && norm.includes("<<<END_TOOL_CALL>>>");
-        log.debug({ count, textLen: text.length, lastLength, stableChecks, isNewMessage, isMutated, hasToolCall }, "polling assistantMessage");
+        const hasToolCall =
+          norm.includes("<<<TOOL_CALL>>>") && norm.includes("<<<END_TOOL_CALL>>>");
+        log.debug(
+          {
+            count,
+            textLen: text.length,
+            lastLength,
+            stableChecks,
+            isNewMessage,
+            isMutated,
+            hasToolCall,
+          },
+          "polling assistantMessage"
+        );
         // Para TOOL_CALL exigimos que el JSON interno sea parseable antes de darlo por listo, evitando truncado por streaming
         // Si el JSON no es válido (HTML con comillas/newlines sin escapar), aceptamos lenient igual para no truncar.
         if (text.length === lastLength && text.length > 0) {
           stableChecks++;
           if (hasToolCall && stableChecks >= 1) {
             // Validar que el interior sea JSON parseable o lenient-completo (evita devolver bloque a medio streamear)
-            const inner = norm.slice(norm.indexOf("<<<TOOL_CALL>>>") + "<<<TOOL_CALL>>>".length, norm.indexOf("<<<END_TOOL_CALL>>>")).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-            try { JSON.parse(inner); return; } catch (_e) { void _e; }
+            const inner = norm
+              .slice(
+                norm.indexOf("<<<TOOL_CALL>>>") + "<<<TOOL_CALL>>>".length,
+                norm.indexOf("<<<END_TOOL_CALL>>>")
+              )
+              .trim()
+              .replace(/^```(?:json)?\s*/i, "")
+              .replace(/```\s*$/i, "")
+              .trim();
+            try {
+              JSON.parse(inner);
+              return;
+            } catch (_e) {
+              void _e;
+            }
             if (isLenientToolCallComplete(inner)) return;
+            if (isLenientEditFileComplete(inner)) return;
             // si no parsea aún, seguir esperando (puede seguir streameando)
             if (stableChecks >= 3) return;
           } else if (stableChecks >= 3) return;
-        } else if (text.length > 0) { stableChecks = 0; lastLength = text.length; }
+        } else if (text.length > 0) {
+          stableChecks = 0;
+          lastLength = text.length;
+        }
       }
     }
     await page.waitForTimeout(800);
   }
   const finalCount = await page.locator(SELECTORS.assistantMessage).count();
-  let lastText = "";
-  try { if (finalCount > 0) lastText = (await page.locator(SELECTORS.assistantMessage).nth(finalCount - 1).innerText()).slice(0, 400); } catch (_e) { void _e; }
+  let fullLastText = "";
+  try {
+    if (finalCount > 0)
+      fullLastText = await page
+        .locator(SELECTORS.assistantMessage)
+        .nth(finalCount - 1)
+        .innerText();
+  } catch (_e) {
+    void _e;
+  }
+  const lastTextPreview = fullLastText.slice(0, 400);
+  const trimmedFull = fullLastText.trim();
   // Si el último texto ya es un TOOL_CALL válido, no lanzar timeout — devolver como éxito (el caller lo parseará)
-  if (lastText.includes("<<<TOOL_CALL>>>") && lastText.includes("<<<END_TOOL_CALL>>>")) {
-    log.warn({ countBefore, finalCount, lastText: lastText.slice(0, 200) }, "waitForResponseToFinish timeout pero se detectó TOOL_CALL completo — retornando igual");
+  // Usar fullLastText (no slice truncado) para no perder END marker de payloads largos con HTML
+  if (fullLastText.includes("<<<TOOL_CALL>>>") && fullLastText.includes("<<<END_TOOL_CALL>>>")) {
+    const normFull = fullLastText.replace(/\u00A0/g, " ");
+    const innerFull = normFull
+      .slice(
+        normFull.indexOf("<<<TOOL_CALL>>>") + "<<<TOOL_CALL>>>".length,
+        normFull.indexOf("<<<END_TOOL_CALL>>>")
+      )
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/```\s*$/i, "")
+      .trim();
+    let looksComplete = false;
+    try {
+      JSON.parse(innerFull);
+      looksComplete = true;
+    } catch (_e) {
+      void _e;
+    }
+    if (!looksComplete)
+      looksComplete = isLenientToolCallComplete(innerFull) || isLenientEditFileComplete(innerFull);
+    // Si no parece completo pero tiene ambos marcadores, igual retornar (evita timeout falso como el de klk.html con 480+ chars)
+    if (looksComplete || fullLastText.includes("<<<END_TOOL_CALL>>>")) {
+      log.warn(
+        { countBefore, finalCount, lastText: lastTextPreview.slice(0, 200) },
+        "waitForResponseToFinish timeout pero se detectó TOOL_CALL completo — retornando igual"
+      );
+      return;
+    }
+  }
+  // Fallback plain-text estable: si hubo al menos 1 stabilidad y hay texto no vacío, retornar (cubre caso 3→2 tras edit_file OK)
+  // Criterio: lastLength>0 implica 1 poll estable + trimmed>20 evita strings vacíos/cargando
+  if (trimmedFull.length > 20 && lastLength > 0) {
+    log.warn(
+      { countBefore, finalCount, lastLength, stableChecks, preview: lastTextPreview.slice(0, 200) },
+      "waitForResponseToFinish timeout pero plain-text estable detectado — retornando"
+    );
     return;
   }
-  throw new Error(`Timeout de ${responseTimeoutMs}ms esperando respuesta (countBefore=${countBefore} finalCount=${finalCount} lastLen=${lastLength} lastText="${lastText}"). Revisa selectors.ts o sube RESPONSE_TIMEOUT_MS en .env. Usa HEADLESS=false para ver el navegador.`);
+  // Último intento: si finalCount>0 y hay texto aunque no hubo estabilidad (ej. count drift 3→2), igual retornar para no perder la respuesta final del modelo
+  if (trimmedFull.length > 20 && finalCount > 0) {
+    log.warn(
+      { countBefore, finalCount, lastText: lastTextPreview.slice(0, 200) },
+      "waitForResponseToFinish timeout pero hay respuesta final — retornando igual (sin estabilidad)"
+    );
+    return;
+  }
+  throw new Error(
+    `Timeout de ${responseTimeoutMs}ms esperando respuesta (countBefore=${countBefore} finalCount=${finalCount} lastLen=${lastLength} lastText="${lastTextPreview}"). Revisa selectors.ts o sube RESPONSE_TIMEOUT_MS en .env. Usa HEADLESS=false para ver el navegador.`
+  );
 }
 
 function isLenientToolCallComplete(inner: string): boolean {
@@ -166,17 +314,39 @@ function isLenientToolCallComplete(inner: string): boolean {
   // Debe terminar con }} (cierre de arguments y outer) al menos
   if (!trimmed.endsWith("}") && !trimmed.endsWith('"}')) return false;
   // Heurística: si contiene "content" y tiene cierre de string + }} , lo damos por completo
-  if (trimmed.includes('"content"') && /"content"\s*:\s*"[\s\S]*"\s*\}\s*\}\s*$/.test(trimmed)) return true;
+  if (trimmed.includes('"content"') && /"content"\s*:\s*"[\s\S]*"\s*\}\s*\}\s*$/.test(trimmed))
+    return true;
   // Para otros tools sin content, si tiene ambos cierres y empieza con {, damos por completo
   if (trimmed.startsWith("{") && trimmed.endsWith("}}")) return true;
   if (trimmed.startsWith("{") && trimmed.endsWith("}")) return true;
   return false;
 }
 
+function isLenientEditFileComplete(inner: string): boolean {
+  if (
+    !inner.includes('"name"') ||
+    !inner.includes('"old_string"') ||
+    !inner.includes('"new_string"')
+  )
+    return false;
+  const trimmed = inner.trim();
+  if (!trimmed.endsWith("}") && !trimmed.endsWith('"}')) return false;
+  if (
+    trimmed.includes('"old_string"') &&
+    trimmed.includes('"new_string"') &&
+    /\}\s*\}\s*$/.test(trimmed)
+  )
+    return true;
+  if (trimmed.startsWith("{") && trimmed.endsWith("}}")) return true;
+  return false;
+}
+
 export async function startNewChat(session: Session): Promise<void> {
   const { page, config } = session;
   const newChatButton = page.locator(SELECTORS.newChatButton).first();
-  if (await newChatButton.count()) { await newChatButton.click(); await page.waitForTimeout(1000); }
-  else await page.goto(config.chatUrl, { waitUntil: "domcontentloaded" });
+  if (await newChatButton.count()) {
+    await newChatButton.click();
+    await page.waitForTimeout(1000);
+  } else await page.goto(config.chatUrl, { waitUntil: "domcontentloaded" });
   session.historyLength = 0;
 }

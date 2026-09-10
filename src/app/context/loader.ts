@@ -5,7 +5,9 @@ import { APP_CONSTANTS } from "../../shared/constants.js";
 
 const log = createLogger("app:context");
 
-export async function loadProjectContext(workspaceDir: string): Promise<{ systemPromptSection: string; loadedFiles: string[] }> {
+export async function loadProjectContext(
+  workspaceDir: string
+): Promise<{ systemPromptSection: string; loadedFiles: string[] }> {
   const loadedFiles: string[] = [];
   const sections: string[] = [];
 
@@ -40,30 +42,52 @@ export async function loadProjectContext(workspaceDir: string): Promise<{ system
   }
 
   if (sections.length === 0) {
-    sections.push("(No se encontró AGENTS.md ni carpetas de convenciones (.agent/, agents/, .deepseek/) en este proyecto. El agente no tiene contexto/reglas específicas del proyecto — procede con más cautela.)");
+    sections.push(
+      "(No se encontró AGENTS.md ni carpetas de convenciones (.agent/, agents/, .deepseek/) en este proyecto. El agente no tiene contexto/reglas específicas del proyecto — procede con más cautela.)"
+    );
   }
 
   log.debug({ loadedFiles }, "Contexto cargado");
   return { systemPromptSection: sections.join("\n\n"), loadedFiles };
 }
 
-function formatSection(title: string, content: string): string { return `--- ${title} ---\n${content.trim()}\n--- fin de ${title} ---`; }
-
-async function readIfExists(filePath: string): Promise<string | null> {
-  try { return await fs.readFile(filePath, "utf-8"); } catch { return null; }
+function formatSection(title: string, content: string): string {
+  return `--- ${title} ---\n${content.trim()}\n--- fin de ${title} ---`;
 }
 
-async function findNestedAgentsMd(currentDir: string, _workspaceDir: string, depth: number): Promise<string[]> {
+async function readIfExists(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+async function findNestedAgentsMd(
+  currentDir: string,
+  _workspaceDir: string,
+  depth: number
+): Promise<string[]> {
   if (depth > APP_CONSTANTS.MAX_DEPTH_FOR_NESTED_AGENTS_MD) return [];
   let entries;
-  try { entries = await fs.readdir(currentDir, { withFileTypes: true }); } catch { return []; }
+  try {
+    entries = await fs.readdir(currentDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
   const results: string[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     if (entry.name.startsWith(".") || APP_CONSTANTS.IGNORED_DIRS.has(entry.name)) continue;
     const subDir = path.join(currentDir, entry.name);
     const candidateFile = path.join(subDir, "AGENTS.md");
-    if (await fs.access(candidateFile).then(()=>true).catch(()=>false)) results.push(candidateFile);
+    if (
+      await fs
+        .access(candidateFile)
+        .then(() => true)
+        .catch(() => false)
+    )
+      results.push(candidateFile);
     results.push(...(await findNestedAgentsMd(subDir, _workspaceDir, depth + 1)));
   }
   return results;
@@ -71,7 +95,11 @@ async function findNestedAgentsMd(currentDir: string, _workspaceDir: string, dep
 
 async function findMarkdownFilesRecursive(dirPath: string): Promise<string[]> {
   let entries;
-  try { entries = await fs.readdir(dirPath, { withFileTypes: true }); } catch { return []; }
+  try {
+    entries = await fs.readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
   const results: string[] = [];
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name);

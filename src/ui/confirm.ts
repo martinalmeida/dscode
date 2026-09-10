@@ -5,10 +5,15 @@ export async function confirm(question: string, { defaultYes = false } = {}): Pr
 
   return new Promise((resolve) => {
     // Drenar buffer residual (el "\n" del "si" previo o del prompt)
-    try { while (process.stdin.read() !== null) void 0; } catch (_e) { void _e; }
+    try {
+      while (process.stdin.read() !== null) void 0;
+    } catch (_e) {
+      void _e;
+    }
     // Asegurar modo raw para leer 's'/'n' sin Enter
     const wasRaw = Boolean((process.stdin as unknown as { isRaw?: boolean }).isRaw);
-    if (!wasRaw) (process.stdin as unknown as { setRawMode?: (v: boolean) => void }).setRawMode?.(true);
+    if (!wasRaw)
+      (process.stdin as unknown as { setRawMode?: (v: boolean) => void }).setRawMode?.(true);
     process.stdin.resume();
     process.stdin.setEncoding("utf8");
 
@@ -19,17 +24,33 @@ export async function confirm(question: string, { defaultYes = false } = {}): Pr
       // Puede llegar "s\n" junto; inspeccionar char por char
       for (const ch of key) {
         if (ch === "\u0003") {
-          settled = true; cleanup(); console.log("n (cancelado)"); resolve(false); return;
+          settled = true;
+          cleanup();
+          console.log("n (cancelado)");
+          resolve(false);
+          return;
         }
         if (ch === "\r" || ch === "\n") {
-          settled = true; cleanup(); console.log(defaultYes ? "s" : "n"); resolve(defaultYes); return;
+          settled = true;
+          cleanup();
+          console.log(defaultYes ? "s" : "n");
+          resolve(defaultYes);
+          return;
         }
         const lower = ch.toLowerCase();
         if (lower === "s" || lower === "y") {
-          settled = true; cleanup(); console.log("s"); resolve(true); return;
+          settled = true;
+          cleanup();
+          console.log("s");
+          resolve(true);
+          return;
         }
         if (lower === "n") {
-          settled = true; cleanup(); console.log("n"); resolve(false); return;
+          settled = true;
+          cleanup();
+          console.log("n");
+          resolve(false);
+          return;
         }
       }
     };
@@ -38,7 +59,8 @@ export async function confirm(question: string, { defaultYes = false } = {}): Pr
       process.stdin.off("data", onData as never);
       // No restaurar a !raw aquí: promptLoop resumeInput lo hará
       // Pero si entramos sin raw, dejarlo como estaba para no dejar terminal colgada
-      if (!wasRaw) (process.stdin as unknown as { setRawMode?: (v: boolean) => void }).setRawMode?.(false);
+      if (!wasRaw)
+        (process.stdin as unknown as { setRawMode?: (v: boolean) => void }).setRawMode?.(false);
     }
 
     process.stdin.on("data", onData as never);

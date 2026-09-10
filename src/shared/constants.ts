@@ -13,7 +13,13 @@ export const APP_CONSTANTS = {
 
 export const READ_ONLY_TOOLS = new Set<string>(["read_file", "list_directory", "search_files"]);
 
-export const BLOCKED_PATTERNS: RegExp[] = [/rm\s+-rf\s+\/(?!\S)/, /:\(\)\{.*:\|:&.*\};:/, /\bmkfs\b/, /\bshutdown\b/, /\breboot\b/];
+export const BLOCKED_PATTERNS: RegExp[] = [
+  /rm\s+-rf\s+\/(?!\S)/,
+  /:\(\)\{.*:\|:&.*\};:/,
+  /\bmkfs\b/,
+  /\bshutdown\b/,
+  /\breboot\b/,
+];
 
 export const CONFIRM_PATTERNS: RegExp[] = [
   /\brm\b/,

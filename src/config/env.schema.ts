@@ -5,7 +5,13 @@ export const envSchema = z.object({
   MODEL_PROVIDER: z
     .string()
     .optional()
-    .transform((v) => (v ?? "web").replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase())
+    .transform((v) =>
+      (v ?? "web")
+        .replace(/\r/g, "")
+        .trim()
+        .replace(/^['"]+|['"]+$/g, "")
+        .toLowerCase()
+    )
     .pipe(z.enum(["web", "api"])),
   DEEPSEEK_API_KEY: z.string().optional(),
   DEEPSEEK_MODEL: z.string().default("deepseek-chat"),
@@ -16,7 +22,11 @@ export const envSchema = z.object({
     .optional()
     .transform((v) => {
       if (!v) return true;
-      const c = v.replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase();
+      const c = v
+        .replace(/\r/g, "")
+        .trim()
+        .replace(/^['"]+|['"]+$/g, "")
+        .toLowerCase();
       return ["true", "1", "yes", "on", "sí", "si"].includes(c);
     })
     .pipe(z.boolean()),
@@ -26,14 +36,25 @@ export const envSchema = z.object({
     .optional()
     .transform((v) => {
       if (!v) return 300000;
-      const n = Number(v.replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, ""));
+      const n = Number(
+        v
+          .replace(/\r/g, "")
+          .trim()
+          .replace(/^['"]+|['"]+$/g, "")
+      );
       return Number.isFinite(n) ? n : 300000;
     })
     .pipe(z.number()),
   LOG_LEVEL: z
     .string()
     .optional()
-    .transform((v) => (v ?? "info").replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase())
+    .transform((v) =>
+      (v ?? "info")
+        .replace(/\r/g, "")
+        .trim()
+        .replace(/^['"]+|['"]+$/g, "")
+        .toLowerCase()
+    )
     .pipe(z.enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])),
   LOG_PRETTY: z.string().optional(),
   CHROMIUM_EXECUTABLE_PATH: z.string().optional(),
@@ -52,7 +73,9 @@ export function getEnvConfig(): EnvConfig {
   }
   // validación cruzada: api requiere key
   if (parsed.data.MODEL_PROVIDER === "api" && !parsed.data.DEEPSEEK_API_KEY) {
-    throw new ConfigError("MODEL_PROVIDER=api requiere DEEPSEEK_API_KEY en tu .env (platform.deepseek.com)");
+    throw new ConfigError(
+      "MODEL_PROVIDER=api requiere DEEPSEEK_API_KEY en tu .env (platform.deepseek.com)"
+    );
   }
   cached = parsed.data;
   return cached;

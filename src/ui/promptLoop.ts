@@ -23,7 +23,8 @@ export function startPromptLoop(opts: {
   let busy = false;
 
   readline.emitKeypressEvents(process.stdin);
-  if (process.stdin.isTTY) (process.stdin as unknown as { setRawMode: (v: boolean) => void }).setRawMode(true);
+  if (process.stdin.isTTY)
+    (process.stdin as unknown as { setRawMode: (v: boolean) => void }).setRawMode(true);
   // stdin nace en paused en Node — sin resume nunca llegan los keypress
   process.stdin.resume();
   process.stdin.setEncoding("utf8");
@@ -41,7 +42,11 @@ export function startPromptLoop(opts: {
   // Fallback para entornos no-TTY (este agente, CI, pipes): readline por líneas
   let fallbackRl: readline.Interface | null = null;
   if (!process.stdin.isTTY) {
-    fallbackRl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
+    fallbackRl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: false,
+    });
     fallbackRl.on("line", async (line: string) => {
       if (busy) return;
       const trimmed = line.trim().toLowerCase();
@@ -67,7 +72,10 @@ export function startPromptLoop(opts: {
     });
   }
 
-  const onKeypress = async (str: string | undefined, key: { ctrl?: boolean; meta?: boolean; name?: string }) => {
+  const onKeypress = async (
+    str: string | undefined,
+    key: { ctrl?: boolean; meta?: boolean; name?: string }
+  ) => {
     if (busy) return;
     if (key.ctrl && key.name === "c") {
       process.stdout.write("\n");
@@ -113,7 +121,11 @@ export function startPromptLoop(opts: {
   function pauseInput(): void {
     if (process.stdin.isTTY) process.stdin.off("keypress", onKeypress);
     // drenar cualquier \n residual del último "si" antes de que confirm lea
-    try { while (process.stdin.read() !== null) void 0; } catch (_e) { void _e; }
+    try {
+      while (process.stdin.read() !== null) void 0;
+    } catch (_e) {
+      void _e;
+    }
   }
   function resumeInput(): void {
     if (process.stdin.isTTY) {
@@ -131,12 +143,15 @@ export function startPromptLoop(opts: {
     stop(): void {
       if (process.stdin.isTTY) process.stdin.off("keypress", onKeypress);
       if (fallbackRl) fallbackRl.close();
-      if (process.stdin.isTTY) (process.stdin as unknown as { setRawMode: (v: boolean) => void }).setRawMode(false);
+      if (process.stdin.isTTY)
+        (process.stdin as unknown as { setRawMode: (v: boolean) => void }).setRawMode(false);
       process.stdin.pause();
     },
     pauseInput,
     resumeInput,
-    setBusy(v: boolean): void { busy = v; },
+    setBusy(v: boolean): void {
+      busy = v;
+    },
     getMode: () => mode,
   };
 }

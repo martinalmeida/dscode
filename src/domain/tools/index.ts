@@ -9,7 +9,15 @@ import { editFileTool } from "./definitions/editFile/editFile.tool.js";
 import { ToolRegistry } from "./registry.js";
 
 export const toolRegistry = new ToolRegistry();
-toolRegistry.registerAll([readFileTool, writeFileTool, listDirectoryTool, runCommandTool, searchFilesTool, deleteFileTool, editFileTool]);
+toolRegistry.registerAll([
+  readFileTool,
+  writeFileTool,
+  listDirectoryTool,
+  runCommandTool,
+  searchFilesTool,
+  deleteFileTool,
+  editFileTool,
+]);
 toolRegistry.freeze();
 
 // Compatibilidad con agent.ts existente: expone mismas señales que antes (toolSchemas/toolExecutors)

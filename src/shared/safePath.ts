@@ -19,7 +19,9 @@ export function resolveSafe(workspaceDir: string, relativePath: string): string 
   const isSameDir = targetResolved === baseReal;
   const isInsideDir = targetResolved.startsWith(baseReal + path.sep);
   if (!isSameDir && !isInsideDir) {
-    throw new Error(`Ruta fuera del workspace permitido: "${relativePath}". Workspace: ${baseReal}`);
+    throw new Error(
+      `Ruta fuera del workspace permitido: "${relativePath}". Workspace: ${baseReal}`
+    );
   }
 
   // Symlink-aware: resolver target real si existe, si no su ancestro existente
@@ -49,7 +51,9 @@ export function resolveSafe(workspaceDir: string, relativePath: string): string 
   const realSame = realTarget === baseReal;
   const realInside = realTarget.startsWith(baseReal + path.sep);
   if (!realSame && !realInside) {
-    throw new Error(`Ruta fuera del workspace permitido (vía symlink): "${relativePath}" → "${realTarget}". Workspace: ${baseReal}`);
+    throw new Error(
+      `Ruta fuera del workspace permitido (vía symlink): "${relativePath}" → "${realTarget}". Workspace: ${baseReal}`
+    );
   }
   return targetResolved;
 }
