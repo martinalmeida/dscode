@@ -37,24 +37,16 @@ async function runAgentSession(): Promise<void> {
   const initialMode = process.argv.includes("--plan") ? "plan" as const : "build" as const;
 
   printBanner();
-  console.log(`\n${PRODUCT_NAME} v${PACKAGE_JSON.version}`);
-  console.log(`Proyecto: ${projectName}`);
-  console.log(`Workspace: ${workspaceDir}\n`);
-
   const { systemPromptSection, loadedFiles } = await loadProjectContext(workspaceDir);
-  if (loadedFiles.length > 0) {
-    console.log(`Contexto cargado (${loadedFiles.length} archivo(s)):`);
-    for (const f of loadedFiles) console.log(`  - ${f}`);
-  } else {
-    console.log("⚠ No se encontró AGENTS.md ni carpetas de convenciones (.agent/, agents/, .deepseek/) en este proyecto.");
-  }
-  console.log("");
+  const ctxInfo = loadedFiles.length > 0 ? loadedFiles.join(", ") : "sin contexto";
+  // Header compacto en 2 líneas
+  console.log(`\x1b[2m${PRODUCT_NAME} v${PACKAGE_JSON.version}  \x1b[0m\x1b[36m${projectName}\x1b[0m \x1b[2m${workspaceDir} · ${ctxInfo}\x1b[0m`);
 
   let client: ReturnType<typeof createModelClient>;
   try { client = createModelClient({ agentInstallDir: AGENT_INSTALL_DIR }); }
   catch (err) { console.error(`\nError de configuración: ${(err as Error).message}\n`); process.exit(1); }
 
-  log.info({ workspaceDir, projectName, mode: initialMode }, "Sesión iniciada");
+  log.debug({ workspaceDir, projectName, mode: initialMode }, "Sesión iniciada");
 
   let activeSpinner: ReturnType<typeof createSpinner> | null = null;
   const agent = new Agent({
@@ -79,8 +71,7 @@ async function runAgentSession(): Promise<void> {
   });
   agent.init();
 
-  console.log("Modo: BUILD (completo) / PLAN (solo lectura) — Tab para alternar.");
-  console.log("Ctrl+C para salir.\n");
+  console.log(`\x1b[2m[${initialMode === "plan" ? "PLAN" : "BUILD"}] Tab alterna · Ctrl+C salir\x1b[0m\n`);
 
   let loop: ReturnType<typeof startPromptLoop> | null = null;
   const shutdown = async (): Promise<void> => {
@@ -100,6 +91,13 @@ async function runAgentSession(): Promise<void> {
       agent.setMode(currentMode);
       const spinner = createSpinner();
       activeSpinner = spinner;
+      // cablear controles de IO para que confirm() pueda pausar spinner+input sin choque
+      agent.setIOControls({
+        pauseInput: () => loop?.pauseInput(),
+        resumeInput: () => loop?.resumeInput(),
+        pauseSpinner: () => activeSpinner?.pause(),
+        resumeSpinner: (msg?: string) => activeSpinner?.resume(msg),
+      });
       spinner.start("Consultando DeepSeek");
       try {
         const respuesta = await agent.run(line);

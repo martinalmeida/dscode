@@ -25,7 +25,7 @@ export function createModelClient(opts: { agentInstallDir: string }): OpenAI | D
       responseTimeoutMs: getEnvNumber("RESPONSE_TIMEOUT_MS", 300000),
       chromiumExecutablePath: chromium.executablePath,
     };
-    log.info({ headless: config.headless, storageStatePath: config.storageStatePath }, "Web provider config");
+    log.debug({ headless: config.headless, storageStatePath: config.storageStatePath }, "Web provider config");
     return new DeepSeekWebClient(config);
   }
   throw new Error(`MODEL_PROVIDER desconocido: "${provider}". Usa "web" o "api" en tu .env.`);

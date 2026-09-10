@@ -1,9 +1,9 @@
 import pino, { type Logger } from "pino";
 
 function resolveLevel(): string {
-  const raw = (process.env.LOG_LEVEL ?? process.env.LOGLEVEL ?? "info").replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase();
+  const raw = (process.env.LOG_LEVEL ?? process.env.LOGLEVEL ?? "warn").replace(/\r/g, "").trim().replace(/^['"]+|['"]+$/g, "").toLowerCase();
   const allowed = new Set(["fatal", "error", "warn", "info", "debug", "trace", "silent"]);
-  return allowed.has(raw) ? raw : "info";
+  return allowed.has(raw) ? raw : "warn";
 }
 
 function shouldUsePretty(): boolean {
@@ -22,36 +22,57 @@ export function getRootLogger(): Logger {
   const level = resolveLevel();
   const usePretty = shouldUsePretty();
 
-  rootLogger = pino({
-    level,
-    // JSON en producción, pretty en dev — sin perder campos
-    transport: usePretty
-      ? {
-          target: "pino-pretty",
-          options: {
-            colorize: true,
-            translateTime: "SYS:standard",
-            ignore: "pid,hostname",
-            singleLine: false,
-          },
-        }
-      : undefined,
-    // nunca loggear secretos
-    redact: {
-      paths: [
-        "apiKey",
-        "api_key",
-        "DEEPSEEK_API_KEY",
-        "token",
-        "password",
-        "storageState",
-        "*.apiKey",
-        "*.token",
-      ],
-      censor: "[REDACTED]",
-    },
-    base: { service: "dscode" },
-  });
+  // Logs a stderr para no pisar el prompt TUI (promptLoop escribe a stdout)
+  if (usePretty) {
+    rootLogger = pino({
+      level,
+      transport: {
+        target: "pino-pretty",
+        options: {
+          colorize: true,
+          translateTime: "SYS:standard",
+          ignore: "pid,hostname",
+          singleLine: false,
+          destination: 2,
+        },
+      },
+      redact: {
+        paths: [
+          "apiKey",
+          "api_key",
+          "DEEPSEEK_API_KEY",
+          "token",
+          "password",
+          "storageState",
+          "*.apiKey",
+          "*.token",
+        ],
+        censor: "[REDACTED]",
+      },
+      base: { service: "dscode" },
+    });
+  } else {
+    rootLogger = pino(
+      {
+        level,
+        redact: {
+          paths: [
+            "apiKey",
+            "api_key",
+            "DEEPSEEK_API_KEY",
+            "token",
+            "password",
+            "storageState",
+            "*.apiKey",
+            "*.token",
+          ],
+          censor: "[REDACTED]",
+        },
+        base: { service: "dscode" },
+      },
+      pino.destination({ dest: 2, sync: false }),
+    );
+  }
 
   return rootLogger;
 }

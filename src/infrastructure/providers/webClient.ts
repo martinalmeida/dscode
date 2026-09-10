@@ -1,5 +1,8 @@
 import { createSession, sendMessage, resumeReadResponse, startNewChat, closeSession, type Session } from "../browser/session.js";
 import { buildToolInstructions, parseModelResponse, formatToolResultMessage } from "./toolProtocol.js";
+import { createLogger } from "../logger/logger.js";
+
+const log = createLogger("providers:webClient");
 
 export interface WebClientConfig {
   chatUrl: string;
@@ -50,11 +53,23 @@ export class DeepSeekWebClient {
       const newMessages = messages.slice(session.historyLength);
       if (newMessages.length === 0) rawResponse = await resumeReadResponse(session);
       else {
-        const textToSend = newMessages.map((m) => (m.role === "tool" ? formatToolResultMessage(m.name || "tool", m.content) : `[${m.role.toUpperCase()}]\n${m.content ?? ""}`)).join("\n\n");
+        const textToSend = newMessages.map((m) => {
+          const role = (m as { role?: string }).role;
+          if (role === "tool") return formatToolResultMessage((m as { name?: string }).name || "tool", (m as { content?: string | null }).content);
+          if (role === "assistant" && (m as unknown as { tool_calls?: Array<{ function: { name: string; arguments: string } }> }).tool_calls) {
+            const calls = (m as unknown as { tool_calls: Array<{ function: { name: string; arguments: string } }> }).tool_calls;
+            return `[ASSISTANT_TOOL_CALLS]\n${calls.map((c) => `${c.function.name}(${c.function.arguments})`).join("\n")}`;
+          }
+          return `[${String(role ?? "UNKNOWN").toUpperCase()}]\n${(m as { content?: string | null }).content ?? ""}`;
+        }).join("\n\n");
         rawResponse = await sendMessage(session, textToSend, { onSubmitted: () => { session.historyLength = messages.length + 1; } });
       }
     }
+    log.debug({ rawLen: rawResponse.length, preview: rawResponse.slice(0, 300) }, "rawResponse recibido");
     const parsed = parseModelResponse(rawResponse);
+    if (!parsed.isToolCall && rawResponse.includes("<<<TOOL_CALL>>>")) {
+      log.warn({ rawPreview: rawResponse.slice(0, 500) }, "rawResponse contenía TOOL_CALL pero parse falló — revisa parseModelResponse");
+    }
     const message = parsed.isToolCall
       ? {
           role: "assistant" as const,

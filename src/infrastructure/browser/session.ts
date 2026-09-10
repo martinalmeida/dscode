@@ -21,7 +21,7 @@ export async function createSession(config: SessionConfig): Promise<Session> {
   }
   const launchOptions: { headless: boolean; executablePath?: string } = { headless };
   if (chromiumExecutablePath) launchOptions.executablePath = chromiumExecutablePath;
-  log.info({ headless: launchOptions.headless }, "[chromium] Lanzando");
+  log.debug({ headless: launchOptions.headless }, "[chromium] Lanzando");
   const browser = await chromium.launch(launchOptions);
   let contextOptions: { storageState?: string } = {};
   if (fs.existsSync(storageStatePath)) contextOptions.storageState = storageStatePath;
@@ -105,17 +105,72 @@ async function waitForResponseToFinish(page: import("playwright").Page, countBef
   const start = Date.now();
   let lastLength = -1;
   let stableChecks = 0;
+  let lastCount = countBefore;
+  let initialLastText = "";
+  if (countBefore > 0) {
+    try { initialLastText = await page.locator(SELECTORS.assistantMessage).nth(countBefore - 1).innerText(); } catch (_e) { void _e; }
+  }
   while (Date.now() - start < responseTimeoutMs) {
     await checkForCloudflareChallenge(page);
     const messages = page.locator(SELECTORS.assistantMessage);
     const count = await messages.count();
-    if (count > countBefore) {
-      const text = await messages.nth(count - 1).innerText();
-      if (text.length === lastLength) { stableChecks++; if (stableChecks >= 3) return; } else { stableChecks = 0; lastLength = text.length; }
+    if (count !== lastCount) {
+      log.debug({ countBefore, count, lastLength }, "assistantMessage count changed");
+      lastCount = count;
+    }
+    // Detectar tanto mensaje nuevo (count > countBefore) como mutación del último (DeepSeek reusa el div y edita el texto)
+    if (count > countBefore || (count > 0 && count === countBefore)) {
+      let text = "";
+      try { text = await messages.nth(count - 1).innerText(); } catch (_e) { void _e; }
+      const isNewMessage = count > countBefore;
+      const isMutated = count === countBefore && text !== initialLastText;
+      // Si no hay mutación ni mensaje nuevo, no es respuesta nueva → seguir esperando
+      if (!isNewMessage && !isMutated) {
+        // nada que hacer, seguir loop
+      } else {
+        const norm = text.replace(/\u00A0/g, " ");
+        const hasToolCall = norm.includes("<<<TOOL_CALL>>>") && norm.includes("<<<END_TOOL_CALL>>>");
+        log.debug({ count, textLen: text.length, lastLength, stableChecks, isNewMessage, isMutated, hasToolCall }, "polling assistantMessage");
+        // Para TOOL_CALL exigimos que el JSON interno sea parseable antes de darlo por listo, evitando truncado por streaming
+        // Si el JSON no es válido (HTML con comillas/newlines sin escapar), aceptamos lenient igual para no truncar.
+        if (text.length === lastLength && text.length > 0) {
+          stableChecks++;
+          if (hasToolCall && stableChecks >= 1) {
+            // Validar que el interior sea JSON parseable o lenient-completo (evita devolver bloque a medio streamear)
+            const inner = norm.slice(norm.indexOf("<<<TOOL_CALL>>>") + "<<<TOOL_CALL>>>".length, norm.indexOf("<<<END_TOOL_CALL>>>")).trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+            try { JSON.parse(inner); return; } catch (_e) { void _e; }
+            if (isLenientToolCallComplete(inner)) return;
+            // si no parsea aún, seguir esperando (puede seguir streameando)
+            if (stableChecks >= 3) return;
+          } else if (stableChecks >= 3) return;
+        } else if (text.length > 0) { stableChecks = 0; lastLength = text.length; }
+      }
     }
     await page.waitForTimeout(800);
   }
-  throw new Error(`Timeout de ${responseTimeoutMs}ms esperando respuesta. Revisa selectors.ts o sube RESPONSE_TIMEOUT_MS en .env.`);
+  const finalCount = await page.locator(SELECTORS.assistantMessage).count();
+  let lastText = "";
+  try { if (finalCount > 0) lastText = (await page.locator(SELECTORS.assistantMessage).nth(finalCount - 1).innerText()).slice(0, 400); } catch (_e) { void _e; }
+  // Si el último texto ya es un TOOL_CALL válido, no lanzar timeout — devolver como éxito (el caller lo parseará)
+  if (lastText.includes("<<<TOOL_CALL>>>") && lastText.includes("<<<END_TOOL_CALL>>>")) {
+    log.warn({ countBefore, finalCount, lastText: lastText.slice(0, 200) }, "waitForResponseToFinish timeout pero se detectó TOOL_CALL completo — retornando igual");
+    return;
+  }
+  throw new Error(`Timeout de ${responseTimeoutMs}ms esperando respuesta (countBefore=${countBefore} finalCount=${finalCount} lastLen=${lastLength} lastText="${lastText}"). Revisa selectors.ts o sube RESPONSE_TIMEOUT_MS en .env. Usa HEADLESS=false para ver el navegador.`);
+}
+
+function isLenientToolCallComplete(inner: string): boolean {
+  // Considera completo si parece write_file con HTML crudo (comillas/newlines sin escapar) ya cerrado con }}
+  if (!inner.includes('"name"') || !inner.includes('"path"')) return false;
+  const trimmed = inner.trim();
+  // Debe terminar con }} (cierre de arguments y outer) al menos
+  if (!trimmed.endsWith("}") && !trimmed.endsWith('"}')) return false;
+  // Heurística: si contiene "content" y tiene cierre de string + }} , lo damos por completo
+  if (trimmed.includes('"content"') && /"content"\s*:\s*"[\s\S]*"\s*\}\s*\}\s*$/.test(trimmed)) return true;
+  // Para otros tools sin content, si tiene ambos cierres y empieza con {, damos por completo
+  if (trimmed.startsWith("{") && trimmed.endsWith("}}")) return true;
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) return true;
+  return false;
 }
 
 export async function startNewChat(session: Session): Promise<void> {

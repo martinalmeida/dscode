@@ -32,6 +32,7 @@ export class Agent {
   private onEvent: (e: { type: string; name: string; args?: string; result?: string }) => void;
   private messages: Array<Record<string, unknown>> = [];
   private toolLog: ReturnType<typeof createLogger>;
+  private ioControls: { pauseInput?: () => void; resumeInput?: () => void; pauseSpinner?: () => void; resumeSpinner?: (msg?: string) => void } = {};
 
   constructor(opts: AgentOpts) {
     this.client = opts.client;
@@ -46,6 +47,10 @@ export class Agent {
   setMode(mode: AgentMode): void {
     log.debug({ mode }, "Modo cambiado");
     this.mode = mode;
+  }
+
+  setIOControls(controls: { pauseInput?: () => void; resumeInput?: () => void; pauseSpinner?: () => void; resumeSpinner?: (msg?: string) => void }): void {
+    this.ioControls = controls;
   }
 
   init(): void {
@@ -97,6 +102,10 @@ export class Agent {
               workspaceDir: this.workspaceDir,
               mode: this.mode,
               logger: this.toolLog,
+              pauseInput: this.ioControls.pauseInput,
+              resumeInput: this.ioControls.resumeInput,
+              pauseSpinner: this.ioControls.pauseSpinner,
+              resumeSpinner: this.ioControls.resumeSpinner,
             });
           } catch (err) {
             result = `Error ejecutando ${name}: ${(err as Error).message}`;

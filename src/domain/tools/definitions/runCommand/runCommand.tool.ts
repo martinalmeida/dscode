@@ -19,9 +19,13 @@ export const runCommandTool: ToolDefinition<{ command: string }> = {
     if (typeof command !== "string" || !command.trim()) return 'Error: falta el argumento "command" o no es un texto válido.';
     if (BLOCKED_PATTERNS.some((re) => re.test(command))) return `BLOQUEADO: el comando "${command}" coincide con un patrón peligroso y no se ejecutó.`;
     if (CONFIRM_PATTERNS.some((re) => re.test(command))) {
+      ctx.pauseSpinner?.();
+      ctx.pauseInput?.();
       console.log(`\n[run_command] El agente quiere ejecutar un comando potencialmente riesgoso:`);
       console.log(`  ${command}`);
       const ok = await confirm("¿Confirmas ejecutarlo?", { defaultYes: false });
+      ctx.resumeInput?.();
+      ctx.resumeSpinner?.(`Ejecutando run_command`);
       if (!ok) return `Cancelado por el usuario: no se ejecutó "${command}".`;
     }
     try {

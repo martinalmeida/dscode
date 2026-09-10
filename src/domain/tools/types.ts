@@ -6,6 +6,10 @@ export interface ToolContext {
   workspaceDir: string;
   mode?: ToolMode;
   logger?: Logger;
+  pauseInput?: () => void;
+  resumeInput?: () => void;
+  pauseSpinner?: () => void;
+  resumeSpinner?: (msg?: string) => void;
 }
 
 export type ToolResult = string;
