@@ -2,6 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSafe } from "../../../../shared/safePath.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
+import {
+  writeFileTransaction,
+  formatEditTransaction,
+  EditConflictError,
+} from "../../../execution/editTransaction.js";
+import { snapshotFile } from "../../../execution/fileSnapshot.js";
 
 function normalizeEditString(s: string): string {
   // Convierte \n literales a saltos reales si predominan
@@ -44,7 +50,11 @@ function findFuzzyMatch(content: string, needle: string): string | null {
   return null;
 }
 
-async function formatWithPrettier(content: string, relPath: string): Promise<string> {
+async function formatWithPrettier(
+  content: string,
+  relPath: string,
+  workspaceDir: string
+): Promise<string> {
   const ext = path.extname(relPath).toLowerCase();
   let parser: string | null = null;
   if (ext === ".html" || ext === ".htm") parser = "html";
@@ -57,9 +67,22 @@ async function formatWithPrettier(content: string, relPath: string): Promise<str
   if (content.split("\n").length < 3) return content;
   try {
     const prettier = await import("prettier");
-    const formatted = await (
-      prettier as unknown as { format: (c: string, o: unknown) => Promise<string> }
-    ).format(content, { parser, tabWidth: 2, useTabs: false });
+    const p = prettier as unknown as {
+      format: (c: string, o: unknown) => Promise<string>;
+      resolveConfig: (file: string) => Promise<Record<string, unknown> | null>;
+    };
+    // Respeta el .prettierrc/.editorconfig real del proyecto si existe (regla
+    // "no impongas tu estilo" del propio system prompt). Solo si no hay config
+    // propia caemos a 2 espacios como default razonable.
+    const full = path.join(workspaceDir, relPath);
+    let projectConfig: Record<string, unknown> | null = null;
+    try {
+      projectConfig = await p.resolveConfig(full);
+    } catch (_e) {
+      void _e;
+    }
+    const options = projectConfig ?? { tabWidth: 2, useTabs: false };
+    const formatted = await p.format(content, { ...options, parser });
     return formatted;
   } catch (_e) {
     void _e;
@@ -71,6 +94,7 @@ export const editFileTool: ToolDefinition<{
   path: string;
   old_string: string;
   new_string: string;
+  expected_hash?: string;
 }> = {
   name: "edit_file",
   description:
@@ -94,6 +118,11 @@ export const editFileTool: ToolDefinition<{
             description:
               "Fragmento exacto a reemplazar, incluyendo indentación y saltos (copiado de read_file). Debe ser único en el archivo.",
           },
+          expected_hash: {
+            type: "string",
+            description:
+              "Hash SHA-256 de la última lectura conocida; evita editar una versión obsoleta.",
+          },
           new_string: {
             type: "string",
             description:
@@ -104,7 +133,10 @@ export const editFileTool: ToolDefinition<{
       },
     },
   },
-  async execute({ path: relPath, old_string, new_string }, ctx: ToolContext): Promise<string> {
+  async execute(
+    { path: relPath, old_string, new_string, expected_hash },
+    ctx: ToolContext
+  ): Promise<string> {
     if (typeof relPath !== "string" || !relPath)
       return 'Falta "path" para edit_file. Ej: {"path":"index.html","old_string":"  <title>Viejo</title>","new_string":"  <title>Nuevo</title>"}';
     if (typeof old_string !== "string" || !old_string)
@@ -114,6 +146,12 @@ export const editFileTool: ToolDefinition<{
     const normOld = normalizeEditString(old_string);
     const normNew = normalizeEditString(new_string);
     const full = resolveSafe(ctx.workspaceDir, relPath);
+    if (expected_hash !== undefined) {
+      const current = await snapshotFile(ctx.workspaceDir, relPath);
+      if (current.hash !== expected_hash) {
+        throw new EditConflictError(relPath, expected_hash, current.hash);
+      }
+    }
     let original: string;
     try {
       original = await fs.readFile(full, "utf-8");
@@ -160,8 +198,8 @@ export const editFileTool: ToolDefinition<{
       return `old_string aparece ${occurrences} veces en "${relPath}". Añade más contexto (3-5 líneas alrededor con indentación) para que sea único.`;
     let next = working.replace(targetOld, normNew);
     // Formatear resultado para mantener indentación humana equilibrada
-    next = await formatWithPrettier(next, relPath);
-    await fs.writeFile(full, next, "utf-8");
-    return `Editado: ${relPath} (reemplazo único, ${original.length}→${next.length} chars, ${next.split("\n").length} líneas).`;
+    next = await formatWithPrettier(next, relPath, ctx.workspaceDir);
+    const transaction = await writeFileTransaction(ctx.workspaceDir, relPath, next, expected_hash);
+    return `Editado: ${relPath} (reemplazo único, ${original.length}→${next.length} chars, ${next.split("\n").length} líneas).\n${formatEditTransaction(transaction)}`;
   },
 };

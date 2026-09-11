@@ -12,5 +12,6 @@ export const SELECTORS = {
   stopGeneratingButton:
     'button[aria-label*="Stop" i], button[aria-label*="停止" i], button[aria-label*="Detener" i], div[role="button"].ds-button--primary.ds-button--filled.ds-button--circle.ds-button--loading, button:has-text("Stop"), button:has-text("Detener"), [class*="loading"] button',
   newChatButton: "text=/^(New chat|Nuevo chat|新对话)$/i",
-  cloudflareChallenge: 'iframe[src*="challenges.cloudflare.com"], #cf-overlay, [data-sitekey], [data-testid="turnstile"]',
+  cloudflareChallenge:
+    'iframe[src*="challenges.cloudflare.com"], #cf-overlay, [data-sitekey], [data-testid="turnstile"]',
 } as const;

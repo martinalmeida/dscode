@@ -2,8 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSafe } from "../../../../shared/safePath.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
+import {
+  deleteFileTransaction,
+  formatEditTransaction,
+} from "../../../execution/editTransaction.js";
 
-export const deleteFileTool: ToolDefinition<{ path: string }> = {
+export const deleteFileTool: ToolDefinition<{ path: string; expected_hash?: string }> = {
   name: "delete_file",
   description:
     'Elimina un archivo o directorio vacío dentro del workspace. Requiere SIEMPRE {path} no vacío. Si omites extensión (ej: "xddvd") sugiere "xddvd.md". Autónomo: borra inmediato si el LLM lo ordena, sin pedir confirmación.',
@@ -22,12 +26,17 @@ export const deleteFileTool: ToolDefinition<{ path: string }> = {
             description:
               'Ruta del archivo o directorio a eliminar, relativa al workspace. Si omites extensión, la tool sugiere coincidencias: "xddvd" → "xddvd.md". Ej: "xddvd.md" o "tmp/notas.txt".',
           },
+          expected_hash: {
+            type: "string",
+            description:
+              "Hash SHA-256 de la última lectura conocida; evita borrar una versión obsoleta.",
+          },
         },
         required: ["path"],
       },
     },
   },
-  async execute({ path: relPath }, ctx: ToolContext): Promise<string> {
+  async execute({ path: relPath, expected_hash }, ctx: ToolContext): Promise<string> {
     if (typeof relPath !== "string" || !relPath.trim()) {
       return 'Faltan argumentos para delete_file: "path" es obligatorio y no vacío. Vuelve a llamar a delete_file con {"path":"<ruta-relativa>"}. Ej: {"path":"xddvd.md"}';
     }
@@ -92,10 +101,11 @@ export const deleteFileTool: ToolDefinition<{ path: string }> = {
 
     const typeLabel = stat.isDirectory() ? "directorio vacío" : "archivo";
     console.log(`\n[delete_file autónomo] Eliminando ${typeLabel}: ${relPath}`);
-
     if (stat.isDirectory()) await fs.rmdir(full);
-    else await fs.unlink(full);
-
-    return `Eliminado: ${relPath} (${typeLabel}).`;
+    else {
+      const result = await deleteFileTransaction(ctx.workspaceDir, relPath, expected_hash);
+      return `Eliminado: ${relPath} (${typeLabel}).\n${formatEditTransaction(result)}`;
+    }
+    return `Eliminado: ${relPath} (${typeLabel}).\nchanged=true`;
   },
 };

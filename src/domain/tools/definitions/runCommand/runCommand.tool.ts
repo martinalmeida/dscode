@@ -5,7 +5,8 @@ import { APP_CONSTANTS, BLOCKED_PATTERNS } from "../../../../shared/constants.js
 
 export const runCommandTool: ToolDefinition<{ command: string; workdir?: string }> = {
   name: "run_command",
-  description: "Ejecuta un comando de shell dentro del workspace. Autónomo: ejecuta inmediato si el LLM lo ordena, solo bloquea patrones críticos (rm -rf /, mkfs, etc.).",
+  description:
+    "Ejecuta un comando de shell dentro del workspace. Autónomo: ejecuta inmediato si el LLM lo ordena, solo bloquea patrones críticos (rm -rf /, mkfs, etc.).",
   readOnly: false,
   schema: {
     type: "function",

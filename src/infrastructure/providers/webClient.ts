@@ -60,7 +60,10 @@ export class DeepSeekWebClient {
   private async _getSession(): Promise<Session> {
     if (this._session) {
       try {
-        if ((this._session.browser as unknown as { isConnected?: () => boolean })?.isConnected?.() === false) {
+        if (
+          (this._session.browser as unknown as { isConnected?: () => boolean })?.isConnected?.() ===
+          false
+        ) {
           log.warn("Browser desconectado — recreando sesión");
           this._session = null;
           this._sessionPromise = null;
@@ -95,15 +98,26 @@ export class DeepSeekWebClient {
     this._sessionPromise = null;
   }
 
-  private async sendWithRetry(session: import("../browser/session.js").Session, text: string, opts: { onSubmitted?: () => void }): Promise<string> {
+  private async sendWithRetry(
+    session: Session,
+    text: string,
+    opts: { onSubmitted?: () => void }
+  ): Promise<string> {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         return await sendMessage(session, text, opts);
       } catch (err) {
         const msg = (err as Error).message || "";
-        const retryable = /Target closed|Page closed|browser has been closed|Execution context was destroyed|Timeout.*fill|waiting for locator.*textarea|textarea mismatch|textarea evaluate|sendButton disabled/i.test(msg);
+        const retryable =
+          !/[DSCODE_AUTH_REQUIRED]|AUTH_REQUIRED/i.test(msg) &&
+          /Target closed|Page closed|browser has been closed|Execution context was destroyed|Timeout.*fill|waiting for locator.*textarea|textarea mismatch|textarea evaluate|sendButton disabled/i.test(
+            msg
+          );
         if (!retryable || attempt === 1) throw err;
-        log.warn({ err: msg.slice(0,400), attempt }, "sendMessage falló — recreando sesión y reintentando");
+        log.warn(
+          { err: msg.slice(0, 400), attempt },
+          "sendMessage falló — recreando sesión y reintentando"
+        );
         this._session = null;
         this._sessionPromise = null;
         session = await this._getSession();
@@ -113,12 +127,47 @@ export class DeepSeekWebClient {
   }
 
   private capTextToSend(text: string): string {
-    const cap = getEnvNumber("DSCODE_MAX_SEND_CHARS", 16000);
+    const cap = Math.max(4000, getEnvNumber("DSCODE_MAX_SEND_CHARS", 16000));
     if (text.length <= cap) return text;
-    const head = text.slice(0, cap - 800);
-    const tail = `\n\n[...payload truncado: ${text.length} chars -> ${cap} cap (DSCODE_MAX_SEND_CHARS). Contexto recortado para evitar textarea mismatch. Usa read_file/glob bajo demanda — no reintentes mandar 20k+ en un solo mensaje.]`;
-    log.warn({ before: text.length, cap }, "textToSend truncado por DSCODE_MAX_SEND_CHARS");
-    return head + tail;
+
+    const before = text.length;
+    const userMarker = "[USER]\n";
+    const toolMarker = "=== HERRAMIENTAS DISPONIBLES";
+    const userStart = text.indexOf(userMarker);
+    const toolsStart = text.indexOf(toolMarker);
+
+    // El pedido actual y las instrucciones de herramientas tienen prioridad.
+    // Primero recortamos únicamente la parte previa al usuario (system/context).
+    if (userStart >= 0 && toolsStart > userStart) {
+      const userEnd = toolsStart;
+      const userAndTools = text.slice(userStart, userEnd);
+      const toolsAndAfter = text.slice(toolsStart);
+      const fixed = userAndTools + toolsAndAfter;
+      const budgetForSystem = cap - fixed.length - 180;
+
+      if (budgetForSystem > 0) {
+        const system = text.slice(0, userStart);
+        const systemKeep =
+          system.length <= budgetForSystem
+            ? system
+            : system.slice(Math.max(0, system.length - budgetForSystem));
+        const notice = `\n[Contexto previo reducido ${before}→${cap} chars; se preservó íntegramente la petición del usuario y las herramientas.]\n`;
+        const result = systemKeep + notice + fixed;
+        log.debug(
+          { before, cap, after: result.length },
+          "Payload reducido preservando usuario y tools"
+        );
+        return result.slice(-cap);
+      }
+    }
+
+    // Si no hay marcadores, conserva la parte final porque contiene la interacción
+    // más reciente. No emite warning: el recorte es un mecanismo normal de control.
+    const notice = `\n[Payload reducido ${before}→${cap} chars.]\n`;
+    const tailBudget = Math.max(0, cap - notice.length);
+    const result = notice + text.slice(-tailBudget);
+    log.debug({ before, cap, after: result.length }, "Payload reducido por límite");
+    return result;
   }
 
   private async _createCompletion(opts: {
@@ -199,7 +248,27 @@ export class DeepSeekWebClient {
       { rawLen: rawResponse.length, preview: rawResponse.slice(0, 300) },
       "rawResponse recibido"
     );
-    const multi = parseModelResponseMulti(rawResponse);
+    let multi = parseModelResponseMulti(rawResponse);
+    // DeepSeek web puede cortar una respuesta que contiene un JSON de tool grande.
+    // Si vemos el marcador pero no pudimos parsearlo, pedimos una única reparación
+    // compacta en el mismo chat en lugar de terminar falsamente la tarea.
+    if (multi.length === 0 && rawResponse.includes("<<<TOOL_CALL>>>")) {
+      log.warn("TOOL_CALL truncado o inválido — solicitando reparación compacta");
+      const repairPrompt =
+        "[REPARACIÓN] Tu último TOOL_CALL quedó incompleto o fue truncado. Emite AHORA ÚNICAMENTE UN TOOL_CALL completo y JSON válido. Para modificar un archivo existente usa apply_patch con un diff corto (no copies el archivo completo). No añadas explicación ni una segunda tool.";
+      const repaired = await this.sendWithRetry(session, repairPrompt, {
+        onSubmitted: () => {
+          session.historyLength += 1;
+        },
+      });
+      multi = parseModelResponseMulti(repaired);
+      if (multi.length === 0) {
+        const parsedRepair = parseModelResponse(repaired);
+        if (parsedRepair.isToolCall) {
+          multi = [{ name: parsedRepair.name, arguments: parsedRepair.arguments }];
+        }
+      }
+    }
     if (multi.length > 0) {
       const message = {
         role: "assistant" as const,
@@ -212,7 +281,19 @@ export class DeepSeekWebClient {
       };
       return {
         id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        choices: [{ message: message as unknown as { role: string; content: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } }],
+        choices: [
+          {
+            message: message as unknown as {
+              role: string;
+              content: string | null;
+              tool_calls?: Array<{
+                id: string;
+                type: string;
+                function: { name: string; arguments: string };
+              }>;
+            },
+          },
+        ],
       };
     }
     const parsed = parseModelResponse(rawResponse);

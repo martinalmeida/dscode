@@ -2,6 +2,7 @@ import path from "node:path";
 import { chromium } from "playwright";
 import { findChromium } from "./findChromium.js";
 import { getEnvString } from "../../shared/env.js";
+import { waitForChatReady } from "./session.js";
 
 export async function runLogin(opts: {
   calibrate?: boolean;
@@ -48,6 +49,16 @@ export async function runLogin(opts: {
   await new Promise<void>((resolve) => {
     process.stdin.once("data", () => resolve());
   });
+  try {
+    await waitForChatReady(page, 5000);
+  } catch (err) {
+    console.error(`\nNo se guardó la sesión: ${(err as Error).message}`);
+    console.error(
+      "Vuelve a ejecutar 'dscode login', inicia sesión y confirma cuando veas el chat."
+    );
+    await browser.close();
+    return;
+  }
   await context.storageState({ path: STORAGE_STATE_PATH });
   console.log(`\nSesión guardada en ${STORAGE_STATE_PATH}.`);
   console.log("Ya puedes correr 'dscode' desde cualquier proyecto sin volver a loguearte.");

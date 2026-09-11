@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { chromium } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright";
 import { SELECTORS } from "./selectors.js";
 import { createLogger } from "../logger/logger.js";
 
@@ -11,14 +11,65 @@ export interface SessionConfig {
   chromiumExecutablePath?: string;
 }
 export interface Session {
-  browser: import("playwright").Browser;
-  context: import("playwright").BrowserContext;
-  page: import("playwright").Page;
+  browser: Browser;
+  context: BrowserContext;
+  page: Page;
   historyLength: number;
   config: SessionConfig;
 }
 
 const log = createLogger("browser:session");
+
+export const DSCODE_AUTH_REQUIRED = "[DSCODE_AUTH_REQUIRED]";
+
+function authError(message: string): Error {
+  const err = new Error(`${DSCODE_AUTH_REQUIRED} ${message}`);
+  (err as Error & { code?: string }).code = "AUTH_REQUIRED";
+  return err;
+}
+
+async function isLoginPage(page: Page): Promise<boolean> {
+  const url = page.url().toLowerCase();
+  if (/\/(login|signin|sign-in|auth)(\/|\?|$)/i.test(url)) return true;
+  const signals = page.locator(
+    'input[type="password"], input[name*="password" i], button:has-text("Log in"), button:has-text("Sign in"), button:has-text("Iniciar sesión"), button:has-text("Iniciar sesion"), text=/Iniciar sesión/i, text=/Sign in/i, text=/Log in/i'
+  );
+  if ((await signals.count().catch(() => 0)) > 0) return true;
+
+  // DeepSeek puede mostrar la pantalla de autenticación sin usar un input
+  // de contraseña (OAuth/captcha). Inspeccionamos solo texto visible.
+  const bodyText = await page
+    .locator("body")
+    .innerText({ timeout: 1500 })
+    .catch(() => "");
+  if (/Iniciar sesión|Iniciar sesion|Sign in|Log in|Create account|Crear cuenta/i.test(bodyText)) {
+    const composer = await resolveTextarea(page);
+    if (!(await composer.isVisible().catch(() => false))) return true;
+  }
+  return false;
+}
+
+export async function waitForChatReady(page: Page, timeoutMs = 12000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await isLoginPage(page)) {
+      throw authError(
+        "No hay una sesión activa de DeepSeek. Ejecuta 'dscode login' y vuelve a intentarlo."
+      );
+    }
+    const textarea = await resolveTextarea(page);
+    if (await textarea.isVisible().catch(() => false)) return;
+    await page.waitForTimeout(250);
+  }
+  if (await isLoginPage(page)) {
+    throw authError(
+      "La sesión de DeepSeek no está autenticada. Ejecuta 'dscode login' para guardar una sesión válida."
+    );
+  }
+  throw new Error(
+    `No se encontró el cuadro de mensaje de DeepSeek después de ${timeoutMs} ms. La interfaz pudo haber cambiado o la página no terminó de cargar.`
+  );
+}
 
 export async function createSession(config: SessionConfig): Promise<Session> {
   const { chatUrl, headless, storageStatePath, chromiumExecutablePath } = config;
@@ -31,14 +82,30 @@ export async function createSession(config: SessionConfig): Promise<Session> {
   if (chromiumExecutablePath) launchOptions.executablePath = chromiumExecutablePath;
   log.debug({ headless: launchOptions.headless }, "[chromium] Lanzando");
   const browser = await chromium.launch(launchOptions);
-  let contextOptions: { storageState?: string; permissions?: string[] } = {};
-  if (fs.existsSync(storageStatePath)) contextOptions.storageState = storageStatePath;
-  else log.warn({ storageStatePath }, "storageState no existe, se inicia sin sesión guardada");
+  const contextOptions: { storageState?: string; permissions?: string[] } = {};
+  const hasStorageState = fs.existsSync(storageStatePath);
+  if (hasStorageState) contextOptions.storageState = storageStatePath;
+  else log.warn({ storageStatePath }, "storageState no existe");
   // Clipboard necesario para fallback de payloads grandes (24k) vía Ctrl+V
-  (contextOptions as { permissions?: string[] }).permissions = ["clipboard-read", "clipboard-write"];
+  (contextOptions as { permissions?: string[] }).permissions = [
+    "clipboard-read",
+    "clipboard-write",
+  ];
   const context = await browser.newContext(contextOptions as never);
   const page = await context.newPage();
   await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+  if (!hasStorageState) {
+    await browser.close();
+    throw authError(
+      `No existe ${storageStatePath}. Ejecuta 'dscode login' para iniciar sesión en DeepSeek y guardar una sesión válida.`
+    );
+  }
+  if (await isLoginPage(page)) {
+    await browser.close();
+    throw authError(
+      `La sesión guardada de DeepSeek ya no es válida. Ejecuta 'dscode login' para renovarla.`
+    );
+  }
   return { browser, context, page, historyLength: 0, config };
 }
 
@@ -50,7 +117,7 @@ export async function closeSession(session: Session | null | undefined): Promise
     await session.browser.close().catch((e) => log.warn({ err: e }, "close browser failed"));
 }
 
-async function checkForCloudflareChallenge(page: import("playwright").Page): Promise<void> {
+async function checkForCloudflareChallenge(page: Page): Promise<void> {
   const overlay = page.locator(SELECTORS.cloudflareChallenge);
   const isVisible = await overlay.isVisible().catch((e) => {
     log.debug({ err: e }, "cloudflare check failed");
@@ -62,7 +129,7 @@ async function checkForCloudflareChallenge(page: import("playwright").Page): Pro
     );
 }
 
-async function resolveTextarea(page: import("playwright").Page): Promise<import("playwright").Locator> {
+async function resolveTextarea(page: Page): Promise<Locator> {
   // Prioriza elemento visible con tamaño real (>10px) para evitar hidden textarea espejo (Lexical off-screen)
   const candidates = [
     'div[contenteditable="true"][role="textbox"]:not([aria-hidden="true"])',
@@ -70,6 +137,7 @@ async function resolveTextarea(page: import("playwright").Page): Promise<import(
     'textarea#chat-input:not([aria-hidden="true"])',
     'textarea[placeholder*="Ask" i]:not([aria-hidden="true"])',
     'textarea[placeholder*="Message" i]:not([aria-hidden="true"])',
+    'textarea[placeholder*="Mensaje" i]:not([aria-hidden="true"])',
   ];
   for (const sel of candidates) {
     const loc = page.locator(sel);
@@ -94,8 +162,9 @@ export async function sendMessage(
 ): Promise<string> {
   const { page } = session;
   await checkForCloudflareChallenge(page);
+  await waitForChatReady(page, 12000);
   let textarea = await resolveTextarea(page);
-  await textarea.waitFor({ state: "visible", timeout: 30000 });
+  await textarea.waitFor({ state: "visible", timeout: 5000 });
   // Heavy: evaluate para textos largos (fill valida char por char y revienta con 15k+ systemPrompt)
   const useEvaluate = text.length > 3500;
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -115,26 +184,44 @@ export async function sendMessage(
             el.focus();
             const isInput = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement;
             if (isInput) {
-              const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const proto =
+                el instanceof HTMLTextAreaElement
+                  ? HTMLTextAreaElement.prototype
+                  : HTMLInputElement.prototype;
               const desc = Object.getOwnPropertyDescriptor(proto, "value");
               try {
                 desc?.set?.call(el, v);
-              } catch (_e) {
+              } catch {
                 (el as HTMLTextAreaElement).value = v;
               }
               // React _valueTracker
               try {
-                const tracker = (el as unknown as { _valueTracker?: { setValue: (x: string) => void } })._valueTracker;
+                const tracker = (
+                  el as unknown as { _valueTracker?: { setValue: (x: string) => void } }
+                )._valueTracker;
                 if (tracker) tracker.setValue("");
               } catch (_e) {
                 void _e;
               }
               try {
-                el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+                el.dispatchEvent(
+                  new InputEvent("beforeinput", {
+                    bubbles: true,
+                    cancelable: true,
+                    inputType: "insertText",
+                    data: v,
+                  } as unknown as InputEventInit)
+                );
               } catch (_e) {
                 void _e;
               }
-              el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+              el.dispatchEvent(
+                new InputEvent("input", {
+                  bubbles: true,
+                  inputType: "insertText",
+                  data: v,
+                } as unknown as InputEventInit)
+              );
               el.dispatchEvent(new Event("change", { bubbles: true }));
             } else {
               // contenteditable (Lexical/ProseMirror)
@@ -144,9 +231,20 @@ export async function sendMessage(
               try {
                 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
                 // @ts-ignore execCommand deprecated pero aún trusted por Lexical
-                if (document.queryCommandSupported && document.queryCommandSupported("insertText")) {
-                  (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("selectAll", false, "");
-                  inserted = (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("insertText", false, v);
+                if (
+                  document.queryCommandSupported &&
+                  document.queryCommandSupported("insertText")
+                ) {
+                  (
+                    document as unknown as {
+                      execCommand: (a: string, b: boolean, c: string) => boolean;
+                    }
+                  ).execCommand("selectAll", false, "");
+                  inserted = (
+                    document as unknown as {
+                      execCommand: (a: string, b: boolean, c: string) => boolean;
+                    }
+                  ).execCommand("insertText", false, v);
                 }
               } catch (_e) {
                 void _e;
@@ -164,13 +262,31 @@ export async function sendMessage(
                 }
                 el.appendChild(frag);
                 try {
-                  el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+                  el.dispatchEvent(
+                    new InputEvent("beforeinput", {
+                      bubbles: true,
+                      inputType: "insertText",
+                      data: v,
+                    } as unknown as InputEventInit)
+                  );
                 } catch (_e) {
                   void _e;
                 }
-                el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+                el.dispatchEvent(
+                  new InputEvent("input", {
+                    bubbles: true,
+                    inputType: "insertText",
+                    data: v,
+                  } as unknown as InputEventInit)
+                );
               } else {
-                el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+                el.dispatchEvent(
+                  new InputEvent("input", {
+                    bubbles: true,
+                    inputType: "insertText",
+                    data: v,
+                  } as unknown as InputEventInit)
+                );
               }
               el.dispatchEvent(new Event("change", { bubbles: true }));
             }
@@ -204,9 +320,17 @@ export async function sendMessage(
             await textarea.evaluate((el: HTMLElement, v: string) => {
               el.focus();
               try {
-                (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("selectAll", false, "");
-                (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("insertText", false, v);
-              } catch (_e) {
+                (
+                  document as unknown as {
+                    execCommand: (a: string, b: boolean, c: string) => boolean;
+                  }
+                ).execCommand("selectAll", false, "");
+                (
+                  document as unknown as {
+                    execCommand: (a: string, b: boolean, c: string) => boolean;
+                  }
+                ).execCommand("insertText", false, v);
+              } catch {
                 el.textContent = v;
                 el.dispatchEvent(new Event("input", { bubbles: true }));
               }
@@ -217,7 +341,10 @@ export async function sendMessage(
           await textarea.evaluate((el: HTMLElement, v: string) => {
             el.focus();
             if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
-              const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const proto =
+                el instanceof HTMLTextAreaElement
+                  ? HTMLTextAreaElement.prototype
+                  : HTMLInputElement.prototype;
               Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, v);
               el.dispatchEvent(new Event("input", { bubbles: true }));
             } else el.textContent = v;
@@ -235,8 +362,14 @@ export async function sendMessage(
             return Math.max(txt, inner, val?.length ?? 0);
           })
           .catch(() => -1);
-        if (actualLen !== -1 && Math.abs(actualLen - text.length) > Math.max(200, text.length * 0.1)) {
-          log.warn({ expected: text.length, actual: actualLen, attempt }, "textarea evaluate longitud no coincide — reintentando");
+        if (
+          actualLen !== -1 &&
+          Math.abs(actualLen - text.length) > Math.max(200, text.length * 0.1)
+        ) {
+          log.warn(
+            { expected: text.length, actual: actualLen, attempt },
+            "textarea evaluate longitud no coincide — reintentando"
+          );
           throw new Error(`textarea mismatch ${actualLen} vs ${text.length}`);
         }
       } else await textarea.fill(text);
@@ -252,7 +385,9 @@ export async function sendMessage(
   try {
     const url = page.url();
     if (url.includes("/login") || url.includes("/auth")) {
-      throw new Error(`Sesión expirada — redirigido a ${url}. Corre 'dscode login' para renovar storage-state.json`);
+      throw new Error(
+        `Sesión expirada — redirigido a ${url}. Corre 'dscode login' para renovar storage-state.json`
+      );
     }
   } catch (e) {
     if ((e as Error).message.includes("Sesión expirada")) throw e;
@@ -310,7 +445,9 @@ export async function sendMessage(
     if (stillDisabled) {
       // No hacer click ciego que nunca genera request → lanzar mismatch para que sendWithRetry pruebe fallback clipboard/execCommand
       log.warn("sendButton sigue disabled tras evaluate — posible textarea no propagado");
-      throw new Error(`textarea mismatch sendButton disabled (stillDisabled) — textarea no propagado`);
+      throw new Error(
+        `textarea mismatch sendButton disabled (stillDisabled) — textarea no propagado`
+      );
     }
     await sendButton.click();
   } else await textarea.press("Enter");
@@ -358,7 +495,7 @@ export async function resumeReadResponse(session: Session): Promise<string> {
 }
 
 async function waitForResponseToFinish(
-  page: import("playwright").Page,
+  page: Page,
   countBefore: number,
   responseTimeoutMs: number,
   initialLastText = ""

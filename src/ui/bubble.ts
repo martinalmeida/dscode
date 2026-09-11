@@ -1,57 +1,79 @@
-const RESET = "\x1b[0m";
-const BG_USER = "\x1b[48;5;236m";
-const BG_AGENT = "\x1b[48;5;235m";
-const BG_TOOL = "\x1b[48;5;236m";
-const FG_USER_PREFIX = "\x1b[94m\x1b[1m";
-const FG_AGENT_PREFIX = "\x1b[95m\x1b[1m";
-const FG_TOOL_PREFIX = "\x1b[33m";
-const FG_WHITE = "\x1b[97m";
-const FG_DIM = "\x1b[2m";
-
-function wrapWithBg(lines: string[], bg: string): string {
-  return lines.map((l) => `${bg}${l}${RESET}`).join("\n");
-}
+import { color, truncateLine } from "./theme.js";
 
 export function printUserBubble(text: string): void {
-  const content = String(text ?? "");
-  const lines = content.split("\n");
-  const rendered = lines.map((l, i) => {
-    const prefix =
-      i === 0 ? `${FG_USER_PREFIX} ● Tú: ${FG_WHITE}` : `${FG_USER_PREFIX} │ ${FG_WHITE}`;
-    return `${prefix}${l} `;
+  const lines = String(text ?? "").split("\n");
+  console.log("");
+  lines.forEach((line, index) => {
+    const prefix = index === 0 ? color("› Tú", "blue") : color("  │", "blue");
+    console.log(`${prefix} ${line}`);
   });
-  console.log("");
-  console.log(wrapWithBg(rendered, BG_USER));
-  console.log("");
 }
 
 export function printAgentBubble(text: string): void {
-  const content = String(text ?? "");
-  const lines = content.split("\n");
-  const rendered = lines.map((l, i) => {
-    const prefix =
-      i === 0 ? `${FG_AGENT_PREFIX} ◆ dscode: ${FG_WHITE}` : `${FG_AGENT_PREFIX} │ ${FG_WHITE}`;
-    return `${prefix}${l} `;
-  });
+  const lines = String(text ?? "").split("\n");
   console.log("");
-  console.log(wrapWithBg(rendered, BG_AGENT));
+  lines.forEach((line, index) => {
+    const prefix = index === 0 ? color("◆ dscode", "magenta") : color("│", "magenta");
+    console.log(`${prefix} ${line}`);
+  });
   console.log("");
 }
 
-export function printToolCall(name: string, args: string): void {
-  const line = `${FG_TOOL_PREFIX}[tool] → ${name}(${args})${RESET}`;
-  console.log(wrapWithBg([line], BG_TOOL));
+export function printToolCall(name: string, args = ""): void {
+  const details = truncateLine(args.replace(/^\{\s*"path"\s*:\s*"([^"]+)".*$/i, "$1"), 88);
+  const suffix =
+    details && details !== args
+      ? ` ${color(details, "gray")}`
+      : args
+        ? ` ${color(truncateLine(args, 72), "gray")}`
+        : "";
+  process.stdout.write(`${color("  ·", "yellow")} ${color(name, "white")}${suffix}\n`);
 }
 
 export function printToolResult(name: string, preview: string): void {
-  const line = `${FG_DIM}${FG_TOOL_PREFIX}[tool] ← ${name}: ${preview}${RESET}`;
-  console.log(wrapWithBg([line], BG_TOOL));
-  console.log("");
+  const value = truncateLine(preview, 110);
+  const lower = value.toLowerCase();
+  if (/changed=true|verificad|passed|exit code: 0|estado: ok/.test(lower)) {
+    console.log(`${color("  ✓", "green")} ${color(name, "gray")} ${color(value, "green")}`);
+    return;
+  }
+  if (/error|fail|conflict|no se modific|no existe|exit code: [1-9]/.test(lower)) {
+    console.log(`${color("  !", "red")} ${color(name, "gray")} ${color(value, "red")}`);
+    return;
+  }
+  console.log(`${color("  ·", "gray")} ${color(name, "gray")} ${color(value, "dim")}`);
+}
+
+export function printStatusLine(input: {
+  mode: "plan" | "build";
+  projectName: string;
+  workspace: string;
+  phase?: string;
+}): void {
+  const mode = input.mode === "build" ? color("BUILD", "magenta") : color("PLAN", "green");
+  const phase = input.phase ? ` ${color("·", "gray")} ${color(input.phase, "gray")}` : "";
+  console.log(
+    `${mode} ${color(input.projectName, "white")} ${color(input.workspace, "gray")}${phase}`
+  );
 }
 
 export function printErrorBubble(text: string): void {
-  const BG_ERR = "\x1b[48;5;124m";
+  console.log(`${color("✖", "red")} ${color(truncateLine(text, 140), "red")}`);
+}
+
+export function printCommandHelp(): void {
   console.log("");
-  console.log(`${BG_ERR}\x1b[97m\x1b[1m ✖ Error: ${text} ${RESET}`);
+  console.log(color("Comandos", "white"));
+  console.log(`  ${color("/help", "cyan")}     mostrar esta ayuda`);
+  console.log(`  ${color("/status", "cyan")}   ver proyecto y modo actual`);
+  console.log(`  ${color("/clear", "cyan")}    limpiar la terminal`);
+  console.log(`  ${color("/plan", "cyan")}     cambiar a PLAN`);
+  console.log(`  ${color("/build", "cyan")}    cambiar a BUILD`);
+  console.log(`  ${color("/exit", "cyan")}     salir`);
+  console.log("");
+  console.log(color("Atajos", "white"));
+  console.log(
+    `  ${color("Tab", "cyan")} cambia PLAN/BUILD · ${color("↑/↓", "cyan")} historial · ${color("Ctrl+L", "cyan")} limpia pantalla`
+  );
   console.log("");
 }

@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
 import path from "node:path";
+import { writeFileTransaction, formatEditTransaction } from "../../../execution/editTransaction.js";
 import { resolveSafe } from "../../../../shared/safePath.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
 
@@ -34,7 +34,11 @@ function normalizeContent(content: string, relPath: string): string {
   return content;
 }
 
-async function formatWithPrettier(content: string, relPath: string): Promise<string> {
+async function formatWithPrettier(
+  content: string,
+  relPath: string,
+  workspaceDir: string
+): Promise<string> {
   const ext = path.extname(relPath).toLowerCase();
   let parser: string | null = null;
   if (ext === ".html" || ext === ".htm") parser = "html";
@@ -48,9 +52,25 @@ async function formatWithPrettier(content: string, relPath: string): Promise<str
   if (content.split("\n").length < 3) return content;
   try {
     const prettier = await import("prettier");
-    const formatted = await (
-      prettier as unknown as { format: (c: string, o: unknown) => Promise<string> }
-    ).format(content, { parser, tabWidth: 2, useTabs: false, semi: true, singleQuote: false });
+    const p = prettier as unknown as {
+      format: (c: string, o: unknown) => Promise<string>;
+      resolveConfig: (file: string) => Promise<Record<string, unknown> | null>;
+    };
+    // Respeta el .prettierrc real del proyecto si existe; si no, defaults razonables.
+    const full = path.join(workspaceDir, relPath);
+    let projectConfig: Record<string, unknown> | null = null;
+    try {
+      projectConfig = await p.resolveConfig(full);
+    } catch (_e) {
+      void _e;
+    }
+    const options = projectConfig ?? {
+      tabWidth: 2,
+      useTabs: false,
+      semi: true,
+      singleQuote: false,
+    };
+    const formatted = await p.format(content, { ...options, parser });
     return formatted;
   } catch (_e) {
     void _e;
@@ -58,7 +78,11 @@ async function formatWithPrettier(content: string, relPath: string): Promise<str
   }
 }
 
-export const writeFileTool: ToolDefinition<{ path: string; content: string }> = {
+export const writeFileTool: ToolDefinition<{
+  path: string;
+  content: string;
+  expected_hash?: string;
+}> = {
   name: "write_file",
   description:
     "Crea o sobrescribe un archivo de texto dentro del workspace con indentación humana (2 espacios, cada tag/bloque en línea separada). Requiere SIEMPRE {path, content} no vacíos. Normaliza \\n literales a saltos reales y crea carpetas intermedias si no existen. Usa edit_file para cambios parciales.",
@@ -77,6 +101,11 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
             description:
               'Ruta del archivo, relativa a la raíz del workspace. Obligatorio, no vacío. Ej: "hola.md" o "docs/nota.md".',
           },
+          expected_hash: {
+            type: "string",
+            description:
+              "Hash SHA-256 de la última lectura conocida. El runtime lo inyecta para evitar sobrescribir cambios externos.",
+          },
           content: {
             type: "string",
             description:
@@ -87,7 +116,7 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
       },
     },
   },
-  async execute({ path: relPath, content }, ctx: ToolContext): Promise<string> {
+  async execute({ path: relPath, content, expected_hash }, ctx: ToolContext): Promise<string> {
     if (typeof relPath !== "string" || !relPath)
       return 'Faltan argumentos para write_file: "path" es obligatorio y no vacío. Vuelve a llamar a write_file con {"path":"<ruta-relativa>","content":"<texto>"}. Ej: {"path":"hola.md","content":"# Hola\\nhola como estas"}';
     if (typeof content !== "string")
@@ -95,40 +124,12 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
     // Normalizar \n literales a saltos reales (fix archivo en 1 línea) antes de cualquier otra cosa
     content = normalizeContent(content, relPath);
     // Formatear con prettier para indentación humana equilibrada (2 espacios)
-    content = await formatWithPrettier(content, relPath);
+    content = await formatWithPrettier(content, relPath, ctx.workspaceDir);
     const full = resolveSafe(ctx.workspaceDir, relPath);
     if (full === path.resolve(ctx.workspaceDir))
       return "Error: la ruta resuelve a la raíz del workspace, no a un archivo.";
-    const existedBefore = await fs
-      .access(full)
-      .then(() => true)
-      .catch(() => false);
-    if (existedBefore) {
-      const previous = await fs.readFile(full, "utf-8").catch(() => "");
-      const preview = buildDiffPreview(previous, content);
-      console.log(`\n[write_file autónomo] Sobrescribiendo archivo existente: ${relPath}`);
-      console.log(preview);
-    }
-    await fs.mkdir(path.dirname(full), { recursive: true });
-    await fs.writeFile(full, content, "utf-8");
-    return `Archivo ${existedBefore ? "sobrescrito" : "creado"}: ${relPath} (${content.length} caracteres, ${content.split("\n").length} líneas).`;
+    const result = await writeFileTransaction(ctx.workspaceDir, relPath, content, expected_hash);
+    const status = result.before.exists ? "sobrescrito" : "creado";
+    return `Archivo ${status}: ${relPath} (${content.length} caracteres, ${content.split("\n").length} líneas).\n${formatEditTransaction(result)}`;
   },
 };
-
-function buildDiffPreview(previous: string, next: string): string {
-  const prevLines = previous.split("\n");
-  const nextLines = next.split("\n");
-  const summary = [
-    `  Antes: ${prevLines.length} líneas, ${previous.length} caracteres`,
-    `  Después: ${nextLines.length} líneas, ${next.length} caracteres`,
-  ];
-  const maxLines = Math.max(prevLines.length, nextLines.length);
-  for (let i = 0; i < maxLines; i++)
-    if (prevLines[i] !== nextLines[i]) {
-      summary.push(`  Primera diferencia en la línea ${i + 1}:`);
-      summary.push(`    - ${prevLines[i] ?? "(sin línea)"}`);
-      summary.push(`    + ${nextLines[i] ?? "(sin línea)"}`);
-      break;
-    }
-  return summary.join("\n");
-}

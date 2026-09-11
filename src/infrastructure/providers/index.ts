@@ -14,7 +14,7 @@ export function createModelClient(opts: { agentInstallDir: string }): DeepSeekWe
   if (legacyProvider && legacyProvider.toLowerCase() !== "web") {
     log.warn(
       { legacyProvider },
-      'MODEL_PROVIDER está deprecado y se ignora — dscode ahora usa solo web (Playwright). Quita esa variable de tu .env.'
+      "MODEL_PROVIDER está deprecado y se ignora — dscode ahora usa solo web (Playwright). Quita esa variable de tu .env."
     );
   }
 
@@ -25,10 +25,16 @@ export function createModelClient(opts: { agentInstallDir: string }): DeepSeekWe
   const config = {
     chatUrl: getEnvString("CHAT_URL", "https://chat.deepseek.com/"),
     headless: getEnvBool("HEADLESS", true),
-    storageStatePath: path.resolve(agentInstallDir, getEnvString("STORAGE_STATE_PATH", "./storage-state.json")),
+    storageStatePath: path.resolve(
+      agentInstallDir,
+      getEnvString("STORAGE_STATE_PATH", "./storage-state.json")
+    ),
     responseTimeoutMs: getEnvNumber("RESPONSE_TIMEOUT_MS", 300000),
     chromiumExecutablePath: chromium.executablePath,
   };
-  log.debug({ headless: config.headless, storageStatePath: config.storageStatePath }, "Web provider config");
+  log.debug(
+    { headless: config.headless, storageStatePath: config.storageStatePath },
+    "Web provider config"
+  );
   return new DeepSeekWebClient(config);
 }

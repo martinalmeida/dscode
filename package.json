@@ -1,6 +1,6 @@
 {
   "name": "dscode",
-  "version": "2.0.0",
+  "version": "3.2.0",
   "private": true,
   "description": "Agente de código en terminal (tipo OpenCode/Claude Code) con motor DeepSeek chat web vía Playwright. Modos Plan/Build, contexto de proyecto vía AGENTS.md.",
   "type": "module",
@@ -18,7 +18,8 @@
     "format:check": "prettier --check src/",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json && chmod +x dist/app/cli.js",
-    "dev": "npm run build && node dist/app/cli.js"
+    "dev": "npm run build && node dist/app/cli.js",
+    "test": "npm run build && node tests/run.mjs"
   },
   "dependencies": {
     "dotenv": "^16.4.5",

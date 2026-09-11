@@ -1,9 +1,104 @@
 import fs from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import path from "node:path";
 import { execa } from "execa";
 import { resolveSafe } from "../../../../shared/safePath.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
 import { APP_CONSTANTS } from "../../../../shared/constants.js";
+
+const BINARY_EXT_BLOCKLIST = new Set([
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".ico",
+  ".webp",
+  ".bmp",
+  ".pdf",
+  ".zip",
+  ".gz",
+  ".tar",
+  ".rar",
+  ".7z",
+  ".mp4",
+  ".mp3",
+  ".wav",
+  ".woff",
+  ".woff2",
+  ".ttf",
+  ".eot",
+  ".exe",
+  ".dll",
+  ".so",
+  ".dylib",
+  ".wasm",
+  ".bin",
+  ".lock",
+]);
+
+/**
+ * Fallback puro-Node para cuando el binario `grep` del sistema no está
+ * disponible (típicamente Windows sin WSL/Git Bash, o contenedores mínimos).
+ * No es tan rápido como grep real, pero evita que search_files quede
+ * completamente roto en esos entornos.
+ */
+async function grepFallback(
+  base: string,
+  workspaceDir: string,
+  pattern: string,
+  maxResults = 300
+): Promise<{ out: string; err: string }> {
+  let re: RegExp;
+  try {
+    re = new RegExp(pattern, "i");
+  } catch {
+    // pattern no es un regex válido (ej. tiene paréntesis sueltos) — tratar literal
+    re = new RegExp(pattern.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  }
+  const matches: string[] = [];
+  async function walk(dir: string): Promise<void> {
+    if (matches.length >= maxResults) return;
+    let entries: Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (matches.length >= maxResults) return;
+      if (APP_CONSTANTS.IGNORED_DIRS.has(e.name)) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        await walk(full);
+        continue;
+      }
+      if (!e.isFile()) continue;
+      if (BINARY_EXT_BLOCKLIST.has(path.extname(e.name).toLowerCase())) continue;
+      let content: string;
+      try {
+        const stat = await fs.stat(full);
+        if (stat.size > 2_000_000) continue; // evita leer archivos gigantes línea a línea
+        content = await fs.readFile(full, "utf-8");
+      } catch {
+        continue;
+      }
+      const rel = path.relative(workspaceDir, full);
+      const lines = content.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        if (re.test(lines[i]!)) {
+          matches.push(`${rel}:${i + 1}:${lines[i]}`);
+          if (matches.length >= maxResults) break;
+        }
+      }
+    }
+  }
+  try {
+    await walk(base);
+  } catch (e) {
+    return { out: "", err: (e as Error).message };
+  }
+  return { out: matches.join("\n"), err: "" };
+}
 
 async function findByFilename(
   base: string,
@@ -17,7 +112,7 @@ async function findByFilename(
   const results: string[] = [];
   async function walk(dir: string): Promise<void> {
     if (results.length >= maxResults) return;
-    let entries: import("node:fs").Dirent[];
+    let entries: Dirent[];
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });
     } catch (_e) {
@@ -93,10 +188,29 @@ export const searchFilesTool: ToolDefinition<{ pattern: string; path?: string }>
         ],
         { reject: false, timeout: APP_CONSTANTS.SEARCH_TIMEOUT_MS }
       );
-      if (result.exitCode === 2) grepErr = result.stderr || "grep código 2";
+      const failedToSpawn =
+        (result as unknown as { failed?: boolean; code?: string }).failed &&
+        (result as unknown as { code?: string }).code === "ENOENT";
+      if (failedToSpawn) {
+        // grep no existe en el sistema (típico en Windows sin WSL/Git Bash). Con
+        // reject:false execa NO lanza en este caso — solo devuelve failed:true en
+        // silencio, lo que antes hacía que search_files reportara "sin
+        // coincidencias" de forma engañosa en vez de realmente buscar. Fallback
+        // en Node puro.
+        const fb = await grepFallback(full, ctx.workspaceDir, pattern);
+        grepOut = fb.out;
+        grepErr = fb.out ? "" : fb.err;
+      } else if (result.exitCode === 2) grepErr = result.stderr || "grep código 2";
       else grepOut = result.stdout;
     } catch (err) {
-      grepErr = (err as Error).message;
+      const msg = (err as Error).message || "";
+      if (/ENOENT|not found|no se reconoce/i.test(msg)) {
+        const fb = await grepFallback(full, ctx.workspaceDir, pattern);
+        grepOut = fb.out;
+        grepErr = fb.out ? "" : fb.err;
+      } else {
+        grepErr = msg;
+      }
     }
 
     // Búsqueda por nombre de archivo (fuzzy sin extensión)

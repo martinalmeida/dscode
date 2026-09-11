@@ -1,36 +1,39 @@
-const CYAN = "\x1b[36m";
-const RESET = "\x1b[0m";
+import { color } from "./theme.js";
 
 export function createSpinner() {
   let timer: NodeJS.Timeout | null = null;
   let tick = 0;
-  let currentMsg = "Consultando DeepSeek";
+  let currentMsg = "Pensando";
 
   function render(): void {
-    const dots = ".".repeat((tick % 4) + 1);
-    const padded = (currentMsg + dots).padEnd(currentMsg.length + 4, " ");
-    process.stdout.write(`\r\x1b[K${CYAN}⠋ ${padded}${RESET}`);
+    if (!process.stdout.isTTY) return;
+    const frames = ["·  ", "·· ", "···", " ··", "  ·", " ··"];
+    const frame = frames[tick % frames.length];
+    process.stdout.write(`\r\x1b[K${color("  " + frame, "cyan")} ${currentMsg}`);
     tick++;
   }
 
+  function clear(): void {
+    process.stdout.write("\r\x1b[K");
+  }
+
   return {
-    start(msg = "Consultando DeepSeek"): void {
-      if (!process.stdout.isTTY) return;
+    start(msg = "Pensando"): void {
       currentMsg = msg;
       tick = 0;
+      if (!process.stdout.isTTY) return;
       render();
       if (timer) clearInterval(timer);
       timer = setInterval(render, 220);
     },
     setMessage(msg: string): void {
       currentMsg = msg;
+      render();
     },
     pause(): void {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-        process.stdout.write("\r\x1b[K");
-      }
+      if (timer) clearInterval(timer);
+      timer = null;
+      clear();
     },
     resume(msg?: string): void {
       if (msg) currentMsg = msg;
@@ -41,11 +44,9 @@ export function createSpinner() {
       timer = setInterval(render, 220);
     },
     stop(): void {
-      if (timer) {
-        clearInterval(timer);
-        timer = null;
-      }
-      process.stdout.write("\r\x1b[K");
+      if (timer) clearInterval(timer);
+      timer = null;
+      clear();
     },
   };
 }

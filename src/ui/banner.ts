@@ -1,20 +1,15 @@
-const RESET = "\x1b[0m";
-const PURPLE = "\x1b[95m";
-const GREEN = "\x1b[92m";
+import { color } from "./theme.js";
 
-const BANNER_LINES = [
-  "██████╗ ███████╗ ██████╗ ██████╗ ██████╗ ███████╗     █████╗  ██████╗ ███████╗███╗   ██╗████████╗",
-  "██╔══██╗██╔════╝██╔════╝██╔═══██╗██╔══██╗██╔════╝    ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝",
-  "██║  ██║███████╗██║     ██║   ██║██║  ██║█████╗█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ",
-  "██║  ██║╚════██║██║     ██║   ██║██║  ██║██╔══╝╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ",
-  "██████╔╝███████║╚██████╗╚██████╔╝██████╔╝███████╗    ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ",
-  "╚═════╝ ╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝ ",
-];
-
-export function printBanner(): void {
+export function printBanner(
+  opts: { compact?: boolean; version?: string; projectName?: string } = {}
+): void {
+  const version = opts.version ? ` ${opts.version}` : "";
+  const project = opts.projectName ? ` · ${opts.projectName}` : "";
   console.log("");
-  for (let i = 0; i < BANNER_LINES.length; i++) {
-    const color = i % 2 === 0 ? PURPLE : GREEN;
-    console.log(`${color}${BANNER_LINES[i]}${RESET}`);
-  }
+  console.log(
+    `${color("dscode", "magenta")} ${color(version.trim(), "dim")}${color(project, "gray")} ${color("• AI coding agent", "dim")}`.trim()
+  );
+  console.log(
+    color("────────────────────────────────────────────────────────────────────────", "gray")
+  );
 }

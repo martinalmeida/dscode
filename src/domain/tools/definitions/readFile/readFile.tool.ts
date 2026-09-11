@@ -25,11 +25,13 @@ export const readFileTool: ToolDefinition<{ path: string; offset?: number; limit
           },
           offset: {
             type: "number",
-            description: 'Offset en chars desde el inicio (0 por defecto). SOLO usa si la respuesta anterior terminó en [...archivo paginado...] con "usa offset X". Si no viste ese marcador, NO pagines.',
+            description:
+              'Offset en chars desde el inicio (0 por defecto). SOLO usa si la respuesta anterior terminó en [...archivo paginado...] con "usa offset X". Si no viste ese marcador, NO pagines.',
           },
           limit: {
             type: "number",
-            description: "Límite de chars a leer desde offset (por defecto MAX_FILE_READ_CHARS). Máx 40000. Solo tras ver [...archivo paginado...].",
+            description:
+              "Límite de chars a leer desde offset (por defecto MAX_FILE_READ_CHARS). Máx 40000. Solo tras ver [...archivo paginado...].",
           },
         },
         required: ["path"],
@@ -42,13 +44,22 @@ export const readFileTool: ToolDefinition<{ path: string; offset?: number; limit
       const content = await fs.readFile(full, "utf-8");
       const MAX = APP_CONSTANTS.MAX_FILE_READ_CHARS;
       const off = Math.max(0, Math.floor(offset ?? 0));
-      if (off >= content.length) throw new Error(`offset ${off} >= ${content.length} total chars en "${relPath}" — archivo tiene ${content.length} chars, no necesita paginación. Usa read_file sin offset o con offset < ${content.length}.`);
+      if (off >= content.length)
+        throw new Error(
+          `offset ${off} >= ${content.length} total chars en "${relPath}" — archivo tiene ${content.length} chars, no necesita paginación. Usa read_file sin offset o con offset < ${content.length}.`
+        );
       const lim = Math.min(MAX, Math.max(1, Math.floor(limit ?? MAX)));
       if (off > 0 || content.length > lim) {
         const slice = content.slice(off, off + lim);
         const truncated = off + lim < content.length;
         const header = off > 0 ? `[offset ${off}/${content.length} chars]\n` : "";
-        return header + slice + (truncated ? `\n\n[...archivo paginado, ${content.length} chars total, mostrando ${off}-${off + slice.length}... usa offset ${off + slice.length} para continuar]` : "");
+        return (
+          header +
+          slice +
+          (truncated
+            ? `\n\n[...archivo paginado, ${content.length} chars total, mostrando ${off}-${off + slice.length}... usa offset ${off + slice.length} para continuar]`
+            : "")
+        );
       }
       return content;
     } catch (e) {

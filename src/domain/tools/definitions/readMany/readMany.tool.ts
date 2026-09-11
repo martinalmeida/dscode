@@ -16,7 +16,7 @@ export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
     function: {
       name: "read_many_files",
       description:
-        "Lee múltiples archivos en batch. Pasa un array de rutas relativas al workspace (ej: [\"src/index.ts\",\"src/app/agent/prompt.ts\",\".env\"]). Máx 40 por llamado (configurable via DSCODE_READ_MANY_LIMIT).",
+        'Lee múltiples archivos en batch. Pasa un array de rutas relativas al workspace (ej: ["src/index.ts","src/app/agent/prompt.ts",".env"]). Máx 40 por llamado (configurable via DSCODE_READ_MANY_LIMIT).',
       parameters: {
         type: "object",
         properties: {
@@ -24,7 +24,7 @@ export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
             type: "array",
             items: { type: "string" },
             description:
-              'Rutas relativas al workspace. Cualquier extensión/nombre, incluidos dotfiles (.env) si los incluyes explícitamente. Máx 40 (DSCODE_READ_MANY_LIMIT).',
+              "Rutas relativas al workspace. Cualquier extensión/nombre, incluidos dotfiles (.env) si los incluyes explícitamente. Máx 40 (DSCODE_READ_MANY_LIMIT).",
           },
         },
         required: ["paths"],
@@ -49,19 +49,30 @@ export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
       try {
         full = resolveSafe(ctx.workspaceDir, relPath.trim());
       } catch (err) {
-        blocks.push(`--- ${relPath} ---\n[Error: ${(err as Error).message}]\n--- fin de ${relPath} ---`);
+        blocks.push(
+          `--- ${relPath} ---\n[Error: ${(err as Error).message}]\n--- fin de ${relPath} ---`
+        );
         continue;
       }
       try {
         const content = await fs.readFile(full, "utf-8");
         const MAX = APP_CONSTANTS.MAX_FILE_READ_CHARS;
-        const sliced = content.length > MAX ? content.slice(0, MAX) + `\n\n[...archivo truncado, ${content.length} chars...]` : content;
+        const sliced =
+          content.length > MAX
+            ? content.slice(0, MAX) + `\n\n[...archivo truncado, ${content.length} chars...]`
+            : content;
         const block = `--- ${relPath} ---\n${sliced}\n--- fin de ${relPath} ---`;
         // Guard global para no explotar MAX_TOOL_RESULT_CHARS
         if (totalChars + block.length > APP_CONSTANTS.MAX_TOOL_RESULT_CHARS) {
           const remaining = APP_CONSTANTS.MAX_TOOL_RESULT_CHARS - totalChars;
-          if (remaining > 200) blocks.push(block.slice(0, remaining) + "\n[...batch truncado por MAX_TOOL_RESULT_CHARS...]");
-          else blocks.push(`[...batch truncado: faltan ${paths.length - blocks.length} archivos por límite de chars...]`);
+          if (remaining > 200)
+            blocks.push(
+              block.slice(0, remaining) + "\n[...batch truncado por MAX_TOOL_RESULT_CHARS...]"
+            );
+          else
+            blocks.push(
+              `[...batch truncado: faltan ${paths.length - blocks.length} archivos por límite de chars...]`
+            );
           break;
         }
         blocks.push(block);
@@ -78,13 +89,21 @@ export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
             const entries = await fs.readdir(dir, { withFileTypes: true });
             const candidates = entries
               .filter((en) => en.isFile() && path.parse(en.name).name.toLowerCase() === stem)
-              .map((en) => path.join(path.dirname(relPath) === "." ? "" : path.dirname(relPath), en.name).replace(/^\//, ""))
+              .map((en) =>
+                path
+                  .join(path.dirname(relPath) === "." ? "" : path.dirname(relPath), en.name)
+                  .replace(/^\//, "")
+              )
               .slice(0, 3);
             if (candidates.length > 0) msg += ` Sugerencias: ${candidates.join(", ")}`;
             else {
               const lax = entries
                 .filter((en) => en.isFile() && en.name.toLowerCase().includes(stem))
-                .map((en) => path.join(path.dirname(relPath) === "." ? "" : path.dirname(relPath), en.name).replace(/^\//, ""))
+                .map((en) =>
+                  path
+                    .join(path.dirname(relPath) === "." ? "" : path.dirname(relPath), en.name)
+                    .replace(/^\//, "")
+                )
                 .slice(0, 3);
               if (lax.length > 0) msg += ` Sugerencias: ${lax.join(", ")}`;
             }
@@ -105,7 +124,8 @@ export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
     }
 
     const out = blocks.join("\n\n");
-    if (out.length > APP_CONSTANTS.MAX_TOOL_RESULT_CHARS) return out.slice(0, APP_CONSTANTS.MAX_TOOL_RESULT_CHARS) + "\n[...resultados truncados...]";
+    if (out.length > APP_CONSTANTS.MAX_TOOL_RESULT_CHARS)
+      return out.slice(0, APP_CONSTANTS.MAX_TOOL_RESULT_CHARS) + "\n[...resultados truncados...]";
     return out || "(sin contenido)";
   },
 };

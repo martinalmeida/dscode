@@ -7,8 +7,13 @@ import { createLogger } from "../logger/logger.js";
 const log = createLogger("transcript");
 
 function transcriptDir(workspaceDir: string): string {
-  const hash = crypto.createHash("sha1").update(path.resolve(workspaceDir)).digest("hex").slice(0, 8);
-  const base = process.env.DSCODE_TRANSCRIPT_DIR || path.join(os.homedir(), ".cache", "dscode", "transcripts");
+  const hash = crypto
+    .createHash("sha1")
+    .update(path.resolve(workspaceDir))
+    .digest("hex")
+    .slice(0, 8);
+  const base =
+    process.env.DSCODE_TRANSCRIPT_DIR || path.join(os.homedir(), ".cache", "dscode", "transcripts");
   return path.join(base, `${path.basename(path.resolve(workspaceDir))}-${hash}`);
 }
 
