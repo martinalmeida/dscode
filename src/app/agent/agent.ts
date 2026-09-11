@@ -17,7 +17,6 @@ type ModelClient = {
 
 interface AgentOpts {
   client: ModelClient;
-  model?: string;
   workspaceDir: string;
   systemPromptContext: string;
   mode?: AgentMode;
@@ -26,7 +25,6 @@ interface AgentOpts {
 
 export class Agent {
   private client: ModelClient;
-  private model: string;
   private workspaceDir: string;
   private systemPromptContext: string;
   private mode: AgentMode;
@@ -42,7 +40,6 @@ export class Agent {
 
   constructor(opts: AgentOpts) {
     this.client = opts.client;
-    this.model = opts.model || "deepseek-chat";
     this.workspaceDir = opts.workspaceDir;
     this.systemPromptContext = opts.systemPromptContext;
     this.mode = opts.mode ?? "build";
@@ -88,7 +85,7 @@ export class Agent {
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           response = (await this.client.chat.completions.create({
-            model: this.model,
+            model: "deepseek-chat",
             messages: this.messages,
             tools: allowedSchemas,
           } as never)) as ChatResponse;
@@ -107,7 +104,7 @@ export class Agent {
       const choice = resp?.choices?.[0];
       if (!choice?.message) {
         throw new Error(
-          "Respuesta inesperada del modelo: no vino 'choices[0].message'. Si estás en MODEL_PROVIDER=web, revisa la consola por errores de Playwright."
+          "Respuesta inesperada del modelo: no vino 'choices[0].message'. Revisa la consola por errores de Playwright (sesión expirada, Cloudflare, Chromium)."
         );
       }
       const msg = choice.message;

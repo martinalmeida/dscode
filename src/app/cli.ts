@@ -70,7 +70,6 @@ async function runAgentSession(): Promise<void> {
   let activeSpinner: ReturnType<typeof createSpinner> | null = null;
   const agent = new Agent({
     client: client as never,
-    model: process.env.DEEPSEEK_MODEL,
     workspaceDir,
     systemPromptContext: systemPromptSection,
     mode: initialMode,

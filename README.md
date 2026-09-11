@@ -1,7 +1,7 @@
 # dscode
 
 Agente de código en terminal, al estilo OpenCode / Claude Code, con
-DeepSeek como motor (API real o el chat web por scraping — intercambiable).
+DeepSeek chat web vía Playwright como único motor (scraping de chat.deepseek.com).
 Se instala **una sola vez** en tu máquina y después se usa **desde
 cualquier proyecto**, igual que esas herramientas.
 
@@ -32,9 +32,8 @@ cp .env.example .env
 ```
 
 El `.env.example` ya viene con valores razonables por defecto
-(`MODEL_PROVIDER=web`, `HEADLESS=true`, detección automática de Chromium).
-Solo tócalo si quieres cambiar de proveedor o forzar un Chromium
-específico.
+(`HEADLESS=true`, detección automática de Chromium).
+Solo tócalo si quieres forzar un Chromium específico.
 
 **Login (una sola vez, o cuando la sesión expire):**
 
@@ -136,15 +135,14 @@ probabilidad de equivocarse en convenciones que no puede adivinar.
 - **Transcript**: cada turno se persiste en `~/.cache/dscode/transcripts/<proyecto>-<hash>/YYYY-MM-DD.jsonl`.
 - **Modo Plan** como red de seguridad adicional: en Plan, las tools de
   escritura ni siquiera se le ofrecen al modelo — y si de todos modos
-  intenta usarlas (más probable en modo scraping, donde el tool-calling
-  es emulado y menos confiable que uno real), se rechazan explícitamente.
+  intenta usarlas (tool-calling emulado vía web, menos confiable que uno nativo), se rechazan explícitamente.
 
 ## Estructura
 
 ```
 dscode/                       <- instalación del programa (NUNCA se toca a sí mismo)
   package.json                 <- bin: "dscode" (usar con npm link)
-  .env                          <- config del PROGRAMA (proveedor, chromium, etc.)
+  .env                          <- config del PROGRAMA (chromium, timeouts, etc.)
   storage-state.json             <- sesión del navegador (se genera con "dscode login")
   templates/                      <- AGENTS.md.example y .agent/ de ejemplo, PARA COPIAR a tus proyectos
   src/
@@ -153,7 +151,7 @@ dscode/                       <- instalación del programa (NUNCA se toca a sí 
     app/agent/prompt.ts           <- buildSystemPrompt (scope recursivo + IGNORED_DIRS)
     app/context/loader.ts         <- AGENTS.md raíz+anidados ilimitado + .agent/.deepseek
     ui/promptLoop.ts              <- Tab alterna Plan/Build, raw input
-    infrastructure/providers/     <- webClient (multi TOOL_CALL) + toolProtocol + index (web|api)
+    infrastructure/providers/     <- webClient (multi TOOL_CALL) + toolProtocol + index (solo web)
     infrastructure/browser/       <- session, selectors, login, findChromium
     infrastructure/transcript/    <- transcript.ts (jsonl por día, ~.cache/dscode)
     infrastructure/logger/        <- pino
@@ -161,7 +159,7 @@ dscode/                       <- instalación del programa (NUNCA se toca a sí 
     shared/safePath.ts + constants.ts (IGNORED_DIRS 10 entradas)
 ```
 
-## Problemas comunes (modo web)
+## Problemas comunes
 
 - **"⛔ No se puede usar dscode sobre su propia carpeta..."**: es
   intencional. `cd` a tu proyecto real antes de correr `dscode`, o usa
@@ -189,6 +187,6 @@ dscode/                       <- instalación del programa (NUNCA se toca a sí 
   cursor con flechas dentro de la línea ni pegar texto multi-línea — para
   eso haría falta una librería de UI de terminal completa, que se dejó
   fuera a propósito para no sumar dependencias pesadas.
-- El modo scraping sigue siendo scraping: frágil ante cambios de UI de
-  DeepSeek y sujeto a sus retos anti-bot. El modo `MODEL_PROVIDER=api` no
-  tiene ninguna de estas limitaciones.
+- El scraping es frágil ante cambios de UI de DeepSeek y sujeto a sus
+  retos anti-bot (Cloudflare, login). Mantener `storage-state.json` fresco
+  con `dscode login` periódico mitiga la mayoría de casos.

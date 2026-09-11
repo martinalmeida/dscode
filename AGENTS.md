@@ -1,6 +1,6 @@
 # AGENTS.md — dscode
 
-Agente de código en terminal (estilo OpenCode/Claude Code) con motor DeepSeek intercambiable: API real o scraping del chat web vía Playwright. Se instala una vez y se corre desde cualquier proyecto (`cwd` = workspace).
+Agente de código en terminal (estilo OpenCode/Claude Code) con motor DeepSeek chat web vía Playwright (scraping de chat.deepseek.com, único motor). Se instala una vez y se corre desde cualquier proyecto (`cwd` = workspace).
 
 ## Comandos
 
@@ -48,9 +48,9 @@ src/
     browser/
       findChromium.ts / session.ts / selectors.ts / login.ts
     providers/
-      index.ts      — factory createModelClient (web|api)
+      index.ts      — factory createModelClient (solo web, Playwright)
       webClient.ts  — DeepSeekWebClient (Playwright, multi TOOL_CALL, _sessionPromise reset + healthcheck)
-      toolProtocol.ts — adaptador OpenAI tool-calling + parseModelResponseMulti
+      toolProtocol.ts — adaptador tool-calling + parseModelResponseMulti
     transcript/
       transcript.ts — appendTranscript/loadLastTranscript (~/.cache/dscode/transcripts/<hash>/YYYY-MM-DD.jsonl)
   shared/
@@ -73,18 +73,17 @@ src/
 - `src/infrastructure/browser/session.ts:36` — `closeSession` cierra `context` y `browser`; `SELECTORS` genéricos fallback (`src/infrastructure/browser/selectors.ts:1`).
 - `src/infrastructure/browser/findChromium.ts:4` — `log.warn` en vez de `console.warn`.
 - `src/infrastructure/providers/webClient.ts:13` — `_sessionPromise` lock sin `as never`, ids `call_${Date.now()}_${random}`.
-- `src/infrastructure/providers/index.ts` — `MODEL_PROVIDER=web|api` (`api` → OpenAI SDK a `api.deepseek.com`, `web` → Playwright).
+- `src/infrastructure/providers/index.ts` — factory solo web (Playwright a `chat.deepseek.com`, `MODEL_PROVIDER` deprecado).
 - `src/infrastructure/logger/logger.ts:8` — `createLogger(context)` y `rootLogger`; pino con `pino-pretty` solo si no es prod y es TTY; `LOG_LEVEL/LOG_PRETTY` strip `\r/quotes`, acepta `sí/si`.
 
 ## Config (.env en AGENT_INSTALL_DIR)
 
 ```
-MODEL_PROVIDER=web|api   # default web
 HEADLESS=true            # web: login/calibrate fuerzan visible igual
 STORAGE_STATE_PATH=./storage-state.json
 RESPONSE_TIMEOUT_MS=300000
 CHROMIUM_EXECUTABLE_PATH=./chrome-linux64/chrome  # auto-detecta si vacío
-DEEPSEEK_API_KEY / DEEPSEEK_MODEL  # solo si api
+CHAT_URL=https://chat.deepseek.com/
 ```
 
 `dotenv` carga `AGENT_INSTALL_DIR/.env`, no `cwd/.env`.
@@ -97,5 +96,5 @@ DEEPSEEK_API_KEY / DEEPSEEK_MODEL  # solo si api
 - No modificar `storage-state.json` manualmente — regenerar con `dscode login`.
 - Chromium local en `chrome-linux64/` (no versionado idealmente).
 - Logger: `import { createLogger } from "../../infrastructure/logger/logger.js"` → `createLogger("dominio:context")`. Usa `LOG_LEVEL=debug` para ver trazas. No uses `console.log` en código nuevo.
-- Nuevo tool: crea `src/domain/tools/definitions/<name>/<name>.tool.ts` que exporte `ToolDefinition`, y regístralo en `src/domain/tools/index.ts`. El registry genera automáticamente el schema OpenAI.
+- Nuevo tool: crea `src/domain/tools/definitions/<name>/<name>.tool.ts` que exporte `ToolDefinition`, y regístralo en `src/domain/tools/index.ts`. El registry genera automáticamente el schema tool-calling.
 - Validación de env: `src/config/env.schema.ts` (zod). No leas `process.env` directo fuera de `shared/env.ts` o `config/`.
