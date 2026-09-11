@@ -49,16 +49,4 @@ export class ToolRegistry {
         .map((t) => t.schema);
     return this.getSchemas();
   }
-
-  getExecutors(): Record<string, ToolDefinition["execute"]> {
-    return Object.fromEntries(this.getAll().map((t) => [t.name, t.execute.bind(t)]));
-  }
-
-  has(name: string): boolean {
-    return this.tools.has(name);
-  }
-
-  size(): number {
-    return this.tools.size;
-  }
 }

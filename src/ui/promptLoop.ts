@@ -5,8 +5,8 @@ const COLORS = {
   reset: "\x1b[0m",
   dim: "\x1b[2m",
   bold: "\x1b[1m",
-  plan: "\x1b[36m",
-  build: "\x1b[33m",
+  plan: "\x1b[92m",
+  build: "\x1b[95m",
   green: "\x1b[32m",
 };
 

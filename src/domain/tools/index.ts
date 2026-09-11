@@ -28,10 +28,4 @@ toolRegistry.registerAll([
 ]);
 toolRegistry.freeze();
 
-// Compatibilidad con agent.ts existente: expone mismas señales que antes (toolSchemas/toolExecutors)
-export const toolSchemas = toolRegistry.getSchemas();
-export const toolExecutors = toolRegistry.getExecutors();
-
-// Re-exports útiles para extensión
-export { ToolRegistry } from "./registry.js";
 export type { ToolDefinition, ToolContext } from "./types.js";

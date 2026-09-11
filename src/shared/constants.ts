@@ -21,27 +21,12 @@ export const APP_CONSTANTS = {
   AGENT_CONTEXT_DIR_NAMES: [".agent", "agents", ".deepseek"] as const,
 } as const;
 
-export const READ_ONLY_TOOLS = new Set<string>(["read_file", "list_directory", "search_files"]);
-
 export const BLOCKED_PATTERNS: RegExp[] = [
   /rm\s+-rf\s+\/(?!\S)/,
   /:\(\)\{.*:\|:&.*\};:/,
   /\bmkfs\b/,
   /\bshutdown\b/,
   /\breboot\b/,
-];
-
-export const CONFIRM_PATTERNS: RegExp[] = [
-  /\brm\b/,
-  /\bmv\b/,
-  /\bgit\s+reset\b/,
-  /\bgit\s+checkout\s+--/,
-  /\bgit\s+clean\b/,
-  /\bgit\s+push\s+.*--force/,
-  />\s*[^&]/,
-  /\bsudo\b/,
-  /\bchmod\b/,
-  /\bchown\b/,
 ];
 
 export type ToolMode = "plan" | "build";

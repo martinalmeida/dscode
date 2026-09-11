@@ -24,7 +24,7 @@ function shouldUsePretty(): boolean {
 
 let rootLogger: Logger | null = null;
 
-export function getRootLogger(): Logger {
+function getRootLogger(): Logger {
   if (rootLogger) return rootLogger;
 
   const level = resolveLevel();

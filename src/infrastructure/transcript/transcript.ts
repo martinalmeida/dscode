@@ -26,14 +26,3 @@ export function appendTranscript(workspaceDir: string, entry: Record<string, unk
     log.warn({ err: e }, "transcript append failed");
   }
 }
-
-export function loadLastTranscript(workspaceDir: string, maxLines = 50): Array<Record<string, unknown>> {
-  try {
-    const p = transcriptPath(workspaceDir);
-    if (!fs.existsSync(p)) return [];
-    const lines = fs.readFileSync(p, "utf-8").trim().split("\n").slice(-maxLines);
-    return lines.map((l) => JSON.parse(l) as Record<string, unknown>);
-  } catch {
-    return [];
-  }
-}

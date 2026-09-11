@@ -142,23 +142,6 @@ export function parseModelResponse(
   }
 }
 
-function _unescapeContent(s: string): string {
-  try {
-    return JSON.parse(
-      `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`
-    ).replace(/\\\\/g, "\\");
-  } catch (_e) {
-    void _e;
-  }
-  return s
-    .replace(/\\n/g, "\n")
-    .replace(/\\r/g, "\r")
-    .replace(/\\t/g, "\t")
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, "\\");
-}
-void _unescapeContent;
-
 function parseLenientWriteFile(
   cleaned: string
 ): { isToolCall: true; name: string; arguments: Record<string, unknown> } | null {
