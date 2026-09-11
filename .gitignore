@@ -5,9 +5,6 @@ node_modules/
 .env
 storage-state.json
 
-# Chromium descargado local (grande, regenerable)
-chrome-linux64/
-chrome/
 
 # build
 dist/
