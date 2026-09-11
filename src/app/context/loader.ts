@@ -66,9 +66,8 @@ async function readIfExists(filePath: string): Promise<string | null> {
 async function findNestedAgentsMd(
   currentDir: string,
   _workspaceDir: string,
-  depth: number
+  _depth: number
 ): Promise<string[]> {
-  if (depth > APP_CONSTANTS.MAX_DEPTH_FOR_NESTED_AGENTS_MD) return [];
   let entries;
   try {
     entries = await fs.readdir(currentDir, { withFileTypes: true });
@@ -88,7 +87,7 @@ async function findNestedAgentsMd(
         .catch(() => false)
     )
       results.push(candidateFile);
-    results.push(...(await findNestedAgentsMd(subDir, _workspaceDir, depth + 1)));
+    results.push(...(await findNestedAgentsMd(subDir, _workspaceDir, _depth + 1)));
   }
   return results;
 }

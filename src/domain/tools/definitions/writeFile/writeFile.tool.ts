@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSafe } from "../../../../shared/safePath.js";
-import { confirm } from "../../../../ui/confirm.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
 
 function normalizeContent(content: string, relPath: string): string {
@@ -107,14 +106,8 @@ export const writeFileTool: ToolDefinition<{ path: string; content: string }> = 
     if (existedBefore) {
       const previous = await fs.readFile(full, "utf-8").catch(() => "");
       const preview = buildDiffPreview(previous, content);
-      ctx.pauseSpinner?.();
-      ctx.pauseInput?.();
-      console.log(`\n[write_file] Vas a SOBRESCRIBIR un archivo existente: ${relPath}`);
+      console.log(`\n[write_file autónomo] Sobrescribiendo archivo existente: ${relPath}`);
       console.log(preview);
-      const ok = await confirm(`¿Confirmas sobrescribir "${relPath}"?`, { defaultYes: false });
-      ctx.resumeInput?.();
-      ctx.resumeSpinner?.(`Ejecutando write_file`);
-      if (!ok) return `Cancelado por el usuario: no se sobrescribió "${relPath}".`;
     }
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, content, "utf-8");

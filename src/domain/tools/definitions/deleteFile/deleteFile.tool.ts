@@ -1,20 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveSafe } from "../../../../shared/safePath.js";
-import { confirm } from "../../../../ui/confirm.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
 
 export const deleteFileTool: ToolDefinition<{ path: string }> = {
   name: "delete_file",
   description:
-    'Elimina un archivo o directorio vacío dentro del workspace. Requiere SIEMPRE {path} no vacío. Si omites extensión (ej: "xddvd") sugiere "xddvd.md". Pide confirmación antes de borrar.',
+    'Elimina un archivo o directorio vacío dentro del workspace. Requiere SIEMPRE {path} no vacío. Si omites extensión (ej: "xddvd") sugiere "xddvd.md". Autónomo: borra inmediato si el LLM lo ordena, sin pedir confirmación.',
   readOnly: false,
   schema: {
     type: "function",
     function: {
       name: "delete_file",
       description:
-        'Elimina un archivo o directorio vacío dentro del workspace. Requiere SIEMPRE {path} no vacío. Si omites extensión (ej: "xddvd") sugiere "xddvd.md". Pide confirmación antes de borrar.',
+        'Elimina un archivo o directorio vacío dentro del workspace. Requiere SIEMPRE {path} no vacío. Si omites extensión (ej: "xddvd") sugiere "xddvd.md". Autónomo sin confirmación.',
       parameters: {
         type: "object",
         properties: {
@@ -92,13 +91,7 @@ export const deleteFileTool: ToolDefinition<{ path: string }> = {
     }
 
     const typeLabel = stat.isDirectory() ? "directorio vacío" : "archivo";
-    ctx.pauseSpinner?.();
-    ctx.pauseInput?.();
-    console.log(`\n[delete_file] Vas a ELIMINAR un ${typeLabel}: ${relPath}`);
-    const ok = await confirm(`¿Confirmas eliminar "${relPath}"?`, { defaultYes: false });
-    ctx.resumeInput?.();
-    ctx.resumeSpinner?.(`Ejecutando delete_file`);
-    if (!ok) return `Cancelado por el usuario: no se eliminó "${relPath}".`;
+    console.log(`\n[delete_file autónomo] Eliminando ${typeLabel}: ${relPath}`);
 
     if (stat.isDirectory()) await fs.rmdir(full);
     else await fs.unlink(full);

@@ -75,7 +75,22 @@ export const searchFilesTool: ToolDefinition<{ pattern: string; path?: string }>
     try {
       const result = await execa(
         "grep",
-        ["-rEn", "--exclude-dir=node_modules", "--exclude-dir=.git", "--", pattern, full],
+        [
+          "-rEn",
+          "--exclude-dir=node_modules",
+          "--exclude-dir=.git",
+          "--exclude-dir=vendor",
+          "--exclude-dir=__pycache__",
+          "--exclude-dir=.venv",
+          "--exclude-dir=.bundle",
+          "--exclude-dir=dist",
+          "--exclude-dir=build",
+          "--exclude-dir=.next",
+          "--exclude-dir=.cache",
+          "--",
+          pattern,
+          full,
+        ],
         { reject: false, timeout: APP_CONSTANTS.SEARCH_TIMEOUT_MS }
       );
       if (result.exitCode === 2) grepErr = result.stderr || "grep código 2";

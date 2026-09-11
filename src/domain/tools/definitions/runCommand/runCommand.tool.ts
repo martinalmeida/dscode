@@ -1,12 +1,11 @@
 import { execa } from "execa";
-import { confirm } from "../../../../ui/confirm.js";
+import { resolveSafe } from "../../../../shared/safePath.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
-import { APP_CONSTANTS, BLOCKED_PATTERNS, CONFIRM_PATTERNS } from "../../../../shared/constants.js";
+import { APP_CONSTANTS, BLOCKED_PATTERNS } from "../../../../shared/constants.js";
 
-export const runCommandTool: ToolDefinition<{ command: string }> = {
+export const runCommandTool: ToolDefinition<{ command: string; workdir?: string }> = {
   name: "run_command",
-  description:
-    "Ejecuta un comando de shell dentro del workspace. Comandos riesgosos (rm, mv, git reset, etc.) piden confirmación.",
+  description: "Ejecuta un comando de shell dentro del workspace. Autónomo: ejecuta inmediato si el LLM lo ordena, solo bloquea patrones críticos (rm -rf /, mkfs, etc.).",
   readOnly: false,
   schema: {
     type: "function",
@@ -16,30 +15,35 @@ export const runCommandTool: ToolDefinition<{ command: string }> = {
         "Ejecuta un comando de shell dentro del workspace (por ejemplo: 'npm test', 'git status').",
       parameters: {
         type: "object",
-        properties: { command: { type: "string", description: "El comando completo a ejecutar." } },
+        properties: {
+          command: { type: "string", description: "El comando completo a ejecutar." },
+          workdir: {
+            type: "string",
+            description:
+              "Subcarpeta del workspace donde ejecutar el comando, relativa al workspace. Por defecto '.' (raíz del workspace). Respetado por resolveSafe — nunca sale del workspace.",
+          },
+        },
         required: ["command"],
       },
     },
   },
-  async execute({ command }, ctx: ToolContext): Promise<string> {
+  async execute({ command, workdir }, ctx: ToolContext): Promise<string> {
     if (typeof command !== "string" || !command.trim())
       return 'Error: falta el argumento "command" o no es un texto válido.';
     if (BLOCKED_PATTERNS.some((re) => re.test(command)))
       return `BLOQUEADO: el comando "${command}" coincide con un patrón peligroso y no se ejecutó.`;
-    if (CONFIRM_PATTERNS.some((re) => re.test(command))) {
-      ctx.pauseSpinner?.();
-      ctx.pauseInput?.();
-      console.log(`\n[run_command] El agente quiere ejecutar un comando potencialmente riesgoso:`);
-      console.log(`  ${command}`);
-      const ok = await confirm("¿Confirmas ejecutarlo?", { defaultYes: false });
-      ctx.resumeInput?.();
-      ctx.resumeSpinner?.(`Ejecutando run_command`);
-      if (!ok) return `Cancelado por el usuario: no se ejecutó "${command}".`;
+    let cwd = ctx.workspaceDir;
+    if (typeof workdir === "string" && workdir.trim() && workdir.trim() !== ".") {
+      try {
+        cwd = resolveSafe(ctx.workspaceDir, workdir.trim());
+      } catch (err) {
+        return `Error: workdir fuera del workspace: "${workdir}" — ${(err as Error).message}`;
+      }
     }
     try {
       const result = await execa(command, {
         shell: true,
-        cwd: ctx.workspaceDir,
+        cwd,
         timeout: APP_CONSTANTS.COMMAND_TIMEOUT_MS,
         reject: false,
       });

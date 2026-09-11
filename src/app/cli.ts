@@ -104,6 +104,8 @@ async function runAgentSession(): Promise<void> {
     console.log("\nHasta luego.");
     process.exit(0);
   };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 
   loop = startPromptLoop({
     projectName,

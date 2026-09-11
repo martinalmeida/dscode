@@ -6,9 +6,19 @@ export const APP_CONSTANTS = {
   MAX_RESPONSE_CHARS: 300,
   COMMAND_TIMEOUT_MS: 60_000,
   SEARCH_TIMEOUT_MS: 30_000,
-  IGNORED_DIRS: new Set(["node_modules", ".git", "dist", "build", ".next", ".cache"]),
+  IGNORED_DIRS: new Set([
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+    "vendor",
+    "__pycache__",
+    ".venv",
+    ".bundle",
+  ]),
   AGENT_CONTEXT_DIR_NAMES: [".agent", "agents", ".deepseek"] as const,
-  MAX_DEPTH_FOR_NESTED_AGENTS_MD: 3,
 } as const;
 
 export const READ_ONLY_TOOLS = new Set<string>(["read_file", "list_directory", "search_files"]);

@@ -57,6 +57,30 @@ export function buildToolInstructions(
   ].join("\n");
 }
 
+export function parseModelResponseMulti(rawText: string): Array<{ name: string; arguments: Record<string, unknown> }> {
+  const norm = rawText.replace(/\u00A0/g, " ").replace(/[\u200B\uFEFF]/g, "").replace(/\r/g, "");
+  const re = /<<<TOOL_CALL>>>([\s\S]*?)<<<END_TOOL_CALL>>>/g;
+  const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(norm)) !== null) {
+    let cleaned = (m[1] ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+    if (!cleaned.startsWith("{")) {
+      const fb = cleaned.indexOf("{");
+      const lb = cleaned.lastIndexOf("}");
+      if (fb !== -1 && lb !== -1 && lb > fb) cleaned = cleaned.slice(fb, lb + 1);
+    }
+    try {
+      const p = JSON.parse(cleaned) as { name: string; arguments?: Record<string, unknown> };
+      if (p.name) { calls.push({ name: p.name, arguments: p.arguments || {} }); continue; }
+    } catch (_e) { void _e; }
+    const lenient = parseLenientWriteFile(cleaned) || parseLenientEditFile(cleaned);
+    if (lenient) { calls.push({ name: lenient.name, arguments: lenient.arguments }); continue; }
+    const match = cleaned.match(/\{[\s\S]*"name"\s*:\s*"[^"]+"[\s\S]*\}/);
+    if (match) try { const p2 = JSON.parse(match[0]) as { name: string; arguments?: Record<string, unknown> }; if (p2.name) calls.push({ name: p2.name, arguments: p2.arguments || {} }); } catch (_e2) { void _e2; }
+  }
+  return calls;
+}
+
 export function parseModelResponse(
   rawText: string
 ):

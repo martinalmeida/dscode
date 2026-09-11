@@ -11,8 +11,8 @@ cualquier proyecto**, igual que esas herramientas.
 |---|---|---|
 | Dónde opera | Su propia carpeta (`WORKSPACE_DIR` en `.env`) | El proyecto desde donde lo invocas (`cwd`), con protección explícita para no poder tocarse a sí mismo |
 | Contexto | Solo `AGENTS.md` en la raíz | `AGENTS.md` (raíz + anidados) + carpetas `.agent/`, `agents/`, `.deepseek/` |
-| Escritura de archivos | Directa, sin confirmación | Pide confirmación antes de **sobrescribir** un archivo existente, con preview de la diferencia |
-| Comandos riesgosos | Solo bloqueaba unos pocos patrones extremos | Además pide confirmación para `rm`, `mv`, `git reset`, `sudo`, redirecciones, etc. |
+| Escritura de archivos | Directa, sin confirmación | Autónomo: sobrescribe sin pedir confirmación (preview en consola) |
+| Comandos riesgosos | Solo bloqueaba unos pocos patrones extremos | Autónomo: `rm`/`mv`/`git reset`/`sudo`/`>` ejecutan directo (solo `rm -rf /`, `mkfs`, `shutdown` bloquean) |
 | Chromium | Ruta absoluta fija de un usuario/máquina | Detección automática multiplataforma (Linux/macOS/Windows), sin rutas fijas |
 | Interfaz | REPL simple | Modos **Plan** (solo lectura) / **Build** (completo), alternables con **Tab**, como en OpenCode |
 
@@ -129,15 +129,11 @@ probabilidad de equivocarse en convenciones que no puede adivinar.
   workspace actual (protección contra escapes tipo `../../otra-carpeta`,
   incluyendo el típico bug de `"/x-evil".startsWith("/x")`), y además el
   programa entero se niega a correr sobre su propia carpeta.
-- **Confirmación antes de sobrescribir**: si `write_file` apunta a un
-  archivo que YA EXISTE, se muestra un resumen de la diferencia (líneas
-  antes/después, primera línea distinta) y se pide confirmación y/n antes
-  de aplicar el cambio. Crear un archivo nuevo no pide confirmación (es
-  aditivo, no destructivo).
-- **Confirmación en comandos riesgosos**: `run_command` pide confirmación
-  para patrones como `rm`, `mv`, `git reset`, `git checkout --`, `sudo`,
-  `chmod`, redirecciones (`>`), etc. Comandos de solo lectura (`ls`,
-  `git status`, `npm test`) corren directo.
+- **Autónomo sin confirmaciones**: `write_file`/`delete_file`/`run_command`
+  ejecutan directo sin pedir `y/n` (preview de diff en consola para
+  sobrescrituras). Solo `BLOCKED_PATTERNS` (`rm -rf /`, `mkfs`, `shutdown`,
+  fork-bomb) bloquea.
+- **Transcript**: cada turno se persiste en `~/.cache/dscode/transcripts/<proyecto>-<hash>/YYYY-MM-DD.jsonl`.
 - **Modo Plan** como red de seguridad adicional: en Plan, las tools de
   escritura ni siquiera se le ofrecen al modelo — y si de todos modos
   intenta usarlas (más probable en modo scraping, donde el tool-calling
@@ -152,23 +148,17 @@ dscode/                       <- instalación del programa (NUNCA se toca a sí 
   storage-state.json             <- sesión del navegador (se genera con "dscode login")
   templates/                      <- AGENTS.md.example y .agent/ de ejemplo, PARA COPIAR a tus proyectos
   src/
-    cli.js                        <- punto de entrada: resuelve workspace=cwd, guard de auto-protección, banner
-    agent.js                       <- loop del agente, con modos Plan/Build
-    contextLoader.js                 <- lee AGENTS.md (raíz+anidados) + .agent//agents//.deepseek/
-    ui/
-      promptLoop.js                   <- input en modo raw, Tab alterna Plan/Build
-      confirm.js                       <- confirmaciones y/n para operaciones riesgosas
-    providers/
-      index.js                          <- factory: API real vs scraping
-      webClient.js                       <- Playwright directo, sin HTTP
-      toolProtocol.js
-    browser/
-      session.js
-      selectors.js
-      login.js
-      findChromium.js                     <- detección multiplataforma, sin rutas de usuario fijas
-    tools/                                  <- read_file, write_file (con confirmación), list_directory, run_command (con confirmación), search_files
-    safePath.js
+    app/cli.ts                    <- entrypoint, guard assertWorkspaceIsSafe, dotenv, SIGINT/SIGTERM
+    app/agent/agent.ts            <- loop, retry/backoff, loop-detection, Promise.all paralelo, transcript
+    app/agent/prompt.ts           <- buildSystemPrompt (scope recursivo + IGNORED_DIRS)
+    app/context/loader.ts         <- AGENTS.md raíz+anidados ilimitado + .agent/.deepseek
+    ui/promptLoop.ts              <- Tab alterna Plan/Build, raw input
+    infrastructure/providers/     <- webClient (multi TOOL_CALL) + toolProtocol + index (web|api)
+    infrastructure/browser/       <- session, selectors, login, findChromium
+    infrastructure/transcript/    <- transcript.ts (jsonl por día, ~.cache/dscode)
+    infrastructure/logger/        <- pino
+    domain/tools/                 <- 11 tools: read_file, read_many_files, list_directory, search_files, glob, write_file, edit_file, apply_patch, delete_file, run_command (workdir), diagnostics
+    shared/safePath.ts + constants.ts (IGNORED_DIRS 10 entradas)
 ```
 
 ## Problemas comunes (modo web)

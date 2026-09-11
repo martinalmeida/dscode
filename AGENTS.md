@@ -29,19 +29,19 @@ Estructura profesional por capas (`src/` → `dist/`). Todo es TypeScript estric
 ```
 src/
   app/
-    cli.ts          — entrypoint / bin (AGENT_INSTALL_DIR, guard assertWorkspaceIsSafe, dotenv, banner, provider, Agent)
+    cli.ts          — entrypoint / bin (AGENT_INSTALL_DIR, guard assertWorkspaceIsSafe, dotenv, banner, provider, Agent, SIGINT/SIGTERM)
     agent/
-      agent.ts      — loop principal (MAX_TOOL_ITERATIONS=15, filtra tools según modo)
+      agent.ts      — loop principal (MAX_TOOL_ITERATIONS=15, retry/backoff 3×, loop-detection 3×, Promise.all paralelo, truncado 8000, transcript)
       modes.ts      — AgentMode, MAX_TOOL_ITERATIONS, READ_ONLY_TOOLS
-      prompt.ts     — buildSystemPrompt
+      prompt.ts     — buildSystemPrompt (scope recursivo ilimitado, IGNORED_DIRS, batch paralelo, autónomo)
     context/
-      loader.ts     — carga AGENTS.md raíz+anidados (≤3 niveles) + .agent/agents/.deepseek/*.md
+      loader.ts     — carga AGENTS.md raíz+anidados ilimitado + .agent/agents/.deepseek/*.md
   domain/
     tools/
       types.ts      — ToolDefinition, ToolContext, ToolSchema
       registry.ts   — ToolRegistry (get/getAll/getSchemas/getSchemasForMode, inmutable)
-      index.ts      — instancia central `toolRegistry` + `toolSchemas`
-      definitions/  — readFile, writeFile, listDirectory, runCommand, searchFiles (1 carpeta/tool)
+      index.ts      — instancia central `toolRegistry` (11 tools) + `toolSchemas`
+      definitions/  — readFile, readMany, listDirectory, runCommand (workdir), searchFiles, deleteFile, editFile, glob (fast-glob), patch (multi-hunk), diagnostics (tsc+eslint) (1 carpeta/tool)
   infrastructure/
     logger/
       logger.ts     — pino (pretty en dev, JSON en prod, redact, LOG_LEVEL/LOG_PRETTY)
@@ -49,11 +49,13 @@ src/
       findChromium.ts / session.ts / selectors.ts / login.ts
     providers/
       index.ts      — factory createModelClient (web|api)
-      webClient.ts  — DeepSeekWebClient (Playwright, tool-calling, close())
-      toolProtocol.ts — adaptador OpenAI tool-calling para DeepSeek web
+      webClient.ts  — DeepSeekWebClient (Playwright, multi TOOL_CALL, _sessionPromise reset + healthcheck)
+      toolProtocol.ts — adaptador OpenAI tool-calling + parseModelResponseMulti
+    transcript/
+      transcript.ts — appendTranscript/loadLastTranscript (~/.cache/dscode/transcripts/<hash>/YYYY-MM-DD.jsonl)
   shared/
     safePath.ts     — resolveSafe (=== base || startsWith(base+sep) + realpath symlink-aware)
-    constants.ts    — APP_CONSTANTS, READ_ONLY_TOOLS, BLOCKED_PATTERNS, CONFIRM_PATTERNS (single-source)
+    constants.ts    — APP_CONSTANTS (IGNORED_DIRS 10: +vendor/__pycache__/.venv/.bundle), READ_ONLY_TOOLS, BLOCKED_PATTERNS, CONFIRM_PATTERNS
     env.ts          — getEnvString/getEnvBool/getEnvNumber (strip \r/quotes, sí/si)
     errors.ts       — DscodeError, WorkspaceError, ToolError, ConfigError
   ui/

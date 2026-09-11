@@ -8,6 +8,7 @@ import {
 } from "../browser/session.js";
 import {
   buildToolInstructions,
+  parseModelResponseMulti,
   parseModelResponse,
   formatToolResultMessage,
 } from "./toolProtocol.js";
@@ -56,12 +57,31 @@ export class DeepSeekWebClient {
   }
 
   private async _getSession(): Promise<Session> {
-    if (this._session) return this._session;
+    if (this._session) {
+      try {
+        if ((this._session.browser as unknown as { isConnected?: () => boolean })?.isConnected?.() === false) {
+          log.warn("Browser desconectado — recreando sesión");
+          this._session = null;
+          this._sessionPromise = null;
+        } else if ((this._session.page as unknown as { isClosed?: () => boolean })?.isClosed?.()) {
+          log.warn("Page cerrada — recreando sesión");
+          this._session = null;
+          this._sessionPromise = null;
+        } else return this._session;
+      } catch (_e) {
+        void _e;
+      }
+    }
     if (!this._sessionPromise) {
-      this._sessionPromise = createSession(this.config).then((s) => {
-        this._session = s;
-        return s;
-      });
+      this._sessionPromise = createSession(this.config)
+        .then((s) => {
+          this._session = s;
+          return s;
+        })
+        .catch((err) => {
+          this._sessionPromise = null;
+          throw err;
+        });
     }
     return this._sessionPromise;
   }
@@ -71,6 +91,7 @@ export class DeepSeekWebClient {
       await closeSession(this._session);
       this._session = null;
     }
+    this._sessionPromise = null;
   }
 
   private async _createCompletion(opts: {
@@ -149,6 +170,22 @@ export class DeepSeekWebClient {
       { rawLen: rawResponse.length, preview: rawResponse.slice(0, 300) },
       "rawResponse recibido"
     );
+    const multi = parseModelResponseMulti(rawResponse);
+    if (multi.length > 0) {
+      const message = {
+        role: "assistant" as const,
+        content: null,
+        tool_calls: multi.map((c, i) => ({
+          id: `call_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
+          type: "function" as const,
+          function: { name: c.name, arguments: JSON.stringify(c.arguments) },
+        })),
+      };
+      return {
+        id: `web-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        choices: [{ message: message as unknown as { role: string; content: string | null; tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }> } }],
+      };
+    }
     const parsed = parseModelResponse(rawResponse);
     if (!parsed.isToolCall && rawResponse.includes("<<<TOOL_CALL>>>")) {
       log.warn(
