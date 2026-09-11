@@ -13,6 +13,7 @@ import {
   formatToolResultMessage,
 } from "./toolProtocol.js";
 import { createLogger } from "../logger/logger.js";
+import { getEnvNumber } from "../../shared/env.js";
 
 const log = createLogger("providers:webClient");
 
@@ -94,6 +95,32 @@ export class DeepSeekWebClient {
     this._sessionPromise = null;
   }
 
+  private async sendWithRetry(session: import("../browser/session.js").Session, text: string, opts: { onSubmitted?: () => void }): Promise<string> {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        return await sendMessage(session, text, opts);
+      } catch (err) {
+        const msg = (err as Error).message || "";
+        const retryable = /Target closed|Page closed|browser has been closed|Execution context was destroyed|Timeout.*fill|waiting for locator.*textarea|textarea mismatch|textarea evaluate|sendButton disabled/i.test(msg);
+        if (!retryable || attempt === 1) throw err;
+        log.warn({ err: msg.slice(0,400), attempt }, "sendMessage falló — recreando sesión y reintentando");
+        this._session = null;
+        this._sessionPromise = null;
+        session = await this._getSession();
+      }
+    }
+    throw new Error("sendWithRetry: unreachable");
+  }
+
+  private capTextToSend(text: string): string {
+    const cap = getEnvNumber("DSCODE_MAX_SEND_CHARS", 16000);
+    if (text.length <= cap) return text;
+    const head = text.slice(0, cap - 800);
+    const tail = `\n\n[...payload truncado: ${text.length} chars -> ${cap} cap (DSCODE_MAX_SEND_CHARS). Contexto recortado para evitar textarea mismatch. Usa read_file/glob bajo demanda — no reintentes mandar 20k+ en un solo mensaje.]`;
+    log.warn({ before: text.length, cap }, "textToSend truncado por DSCODE_MAX_SEND_CHARS");
+    return head + tail;
+  }
+
   private async _createCompletion(opts: {
     messages: Array<{ role: string; content?: string | null; name?: string }>;
     tools?: Array<{ function: { name: string; description?: string; parameters?: unknown } }>;
@@ -123,8 +150,9 @@ export class DeepSeekWebClient {
       const body = messages
         .map((m) => `[${m.role.toUpperCase()}]\n${m.content ?? ""}`)
         .join("\n\n");
-      const textToSend = toolInstructions ? `${body}\n\n${toolInstructions}` : body;
-      rawResponse = await sendMessage(session, textToSend, {
+      let textToSend = toolInstructions ? `${body}\n\n${toolInstructions}` : body;
+      textToSend = this.capTextToSend(textToSend);
+      rawResponse = await this.sendWithRetry(session, textToSend, {
         onSubmitted: () => {
           session.historyLength = messages.length + 1;
         },
@@ -133,7 +161,7 @@ export class DeepSeekWebClient {
       const newMessages = messages.slice(session.historyLength);
       if (newMessages.length === 0) rawResponse = await resumeReadResponse(session);
       else {
-        const textToSend = newMessages
+        let textToSend = newMessages
           .map((m) => {
             const role = (m as { role?: string }).role;
             if (role === "tool")
@@ -159,7 +187,8 @@ export class DeepSeekWebClient {
             return `[${String(role ?? "UNKNOWN").toUpperCase()}]\n${(m as { content?: string | null }).content ?? ""}`;
           })
           .join("\n\n");
-        rawResponse = await sendMessage(session, textToSend, {
+        textToSend = this.capTextToSend(textToSend);
+        rawResponse = await this.sendWithRetry(session, textToSend, {
           onSubmitted: () => {
             session.historyLength = messages.length + 1;
           },

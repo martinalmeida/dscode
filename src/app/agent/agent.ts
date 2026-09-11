@@ -1,6 +1,7 @@
 import { toolRegistry } from "../../domain/tools/index.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { MAX_TOOL_ITERATIONS } from "./modes.js";
+import { APP_CONSTANTS } from "../../shared/constants.js";
 import { createLogger } from "../../infrastructure/logger/logger.js";
 import { appendTranscript } from "../../infrastructure/transcript/transcript.js";
 import type { AgentMode } from "./modes.js";
@@ -69,6 +70,33 @@ export class Agent {
     });
   }
 
+  private compactHistoryIfNeeded(): void {
+    // Compaction para trabajo pesado: evita desbordar context-window (≈100k chars)
+    const MAX_HISTORY_CHARS = 100_000;
+    const total = this.messages.reduce((acc, m) => acc + JSON.stringify(m).length, 0);
+    if (total < MAX_HISTORY_CHARS || this.messages.length < 10) return;
+    // Mantener system + últimos 8 mensajes, resumir el resto
+    const sys = this.messages[0]!;
+    const keep = this.messages.slice(-8);
+    const dropped = this.messages.length - 1 - keep.length;
+    const summary = { role: "tool", tool_call_id: "compact", name: "system", content: `[Historial compactado: se omitieron ${dropped} mensajes antiguos para trabajo pesado. Últimos ${keep.length} mensajes preservados. Si necesitas contexto previo, usa search_files/glob.]` };
+    this.messages = [sys, summary as unknown as Record<string, unknown>, ...keep];
+    log.warn({ dropped, total }, "Historial compactado por peso");
+  }
+
+  private async runWithConcurrency<T>(tasks: Array<() => Promise<T>>, limit = 4): Promise<T[]> {
+    const results: T[] = new Array(tasks.length) as T[];
+    let idx = 0;
+    const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+      while (idx < tasks.length) {
+        const cur = idx++;
+        results[cur] = await tasks[cur]!();
+      }
+    });
+    await Promise.all(workers);
+    return results;
+  }
+
   async run(userInput: string): Promise<string> {
     if (this.messages.length === 0) this.init();
     this.messages.push({ role: "user", content: userInput });
@@ -80,6 +108,7 @@ export class Agent {
 
     const recentCalls: string[] = [];
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+      this.compactHistoryIfNeeded();
       let response: ChatResponse | undefined;
       // Retry con backoff simple para transient errors (429, 5xx, timeout, ECONNRESET)
       for (let attempt = 0; attempt < 3; attempt++) {
@@ -128,9 +157,8 @@ export class Agent {
           return hint;
         }
       }
-      // Paralelo: ejecuta todos los tool_calls a la vez, preservando orden de results
-      const results = await Promise.all(
-        msg.tool_calls.map(async (call) => {
+      // Paralelo throttled (4 concurrentes) para trabajo pesado estable
+      const tasks = msg.tool_calls.map((call) => async () => {
           const { name, arguments: rawArgs } = call.function;
           this.onEvent({ type: "tool_call", name, args: rawArgs });
           this.toolLog.debug({ tool: name, args: rawArgs }, "tool_call");
@@ -157,11 +185,11 @@ export class Agent {
               result = `Error ejecutando ${name}: ${(err as Error).message}`;
             }
           }
-          const MAX = 8000;
-          const safeResult = result.length > MAX ? result.slice(0, MAX) + "\n[...resultado truncado...]" : result;
+          const MAX = APP_CONSTANTS.MAX_TOOL_RESULT_CHARS;
+          const safeResult = result.length > MAX ? result.slice(0, MAX) + "\n[...resultado truncado... usa offset/limit en read_file para paginar]" : result;
           return { call, safeResult };
-        })
-      );
+        });
+      const results = await this.runWithConcurrency(tasks, 4);
       for (const { call, safeResult } of results) {
         this.onEvent({ type: "tool_result", name: call.function.name, result: safeResult });
         this.toolLog.debug({ tool: call.function.name, resultPreview: safeResult.slice(0, 500) }, "tool_result");
@@ -173,7 +201,7 @@ export class Agent {
         });
       }
     }
-    return "(Se alcanzó el límite de iteraciones de tools sin llegar a una respuesta final. Revisa el prompt o sube MAX_TOOL_ITERATIONS.)";
+    return `(Se alcanzó el límite de ${MAX_TOOL_ITERATIONS} iteraciones sin respuesta final. Sube DSCODE_MAX_TOOL_ITERATIONS en .env (actual ${MAX_TOOL_ITERATIONS}) o divide la tarea en pasos más pequeños.)`;
   }
 
   async close(): Promise<void> {

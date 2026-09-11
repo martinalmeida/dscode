@@ -5,6 +5,13 @@ export function buildToolInstructions(
   tools: Array<{ function: { name: string; description?: string; parameters?: unknown } }>
 ): string {
   if (!tools || tools.length === 0) return "";
+  // Heavy short mode: evita 4k de ejemplos que revientan fill (ver m0112)
+  const shortEnv = (globalThis as unknown as { process?: { env?: Record<string,string> } }).process?.env?.DSCODE_SHORT_TOOL_INSTRUCTIONS;
+  const useShort = shortEnv === undefined ? true : ["true","1","yes","on","sí","si"].includes(shortEnv.toLowerCase());
+  if (useShort && tools.length >= 8) {
+    const short = tools.map(t=>`- ${t.function.name}: ${(t.function.description||"").slice(0,80)}`).join("\n");
+    return ["","=== HERRAMIENTAS DISPONIBLES (modo corto) ===","Responde con <<<TOOL_CALL>>>{\"name\":\"tool\",\"arguments\":{...}}<<<END_TOOL_CALL>>> si necesitas tool. Formato JSON estricto (\\n y \\\" escapados).","Herramientas:",short,"Si no necesitas tool, responde texto breve (3-5 frases).","=== FIN HERRAMIENTAS ==="].join("\n");
+  }
   const toolsDescription = tools
     .map((t) => {
       const f = t.function;
@@ -42,6 +49,8 @@ export function buildToolInstructions(
     "Ejemplos válidos:",
     `${TOOL_CALL_START}{"name": "write_file", "arguments": {"path": "hola.md", "content": "# Hola\\nhola como estas"}}${TOOL_CALL_END}`,
     `${TOOL_CALL_START}{"name": "read_file", "arguments": {"path": "README.md"}}${TOOL_CALL_END}`,
+    `${TOOL_CALL_START}{"name": "glob", "arguments": {"pattern": "**/*.tsx"}}${TOOL_CALL_END}`,
+    `${TOOL_CALL_START}{"name": "search_files", "arguments": {"pattern": "BackgroundContext", "include": "*.tsx"}}${TOOL_CALL_END}`,
     `${TOOL_CALL_START}{"name": "delete_file", "arguments": {"path": "xddvd.md"}}${TOOL_CALL_END}`,
     `${TOOL_CALL_START}{"name": "edit_file", "arguments": {"path": "index.html", "old_string": "  <title>Viejo</title>", "new_string": "  <title>Nuevo</title>"}}${TOOL_CALL_END}`,
     "Anti-ejemplo (NUNCA hagas esto):",
@@ -57,26 +66,45 @@ export function buildToolInstructions(
   ].join("\n");
 }
 
+function tryParseBlock(cleaned: string): { name: string; arguments: Record<string, unknown> } | null {
+  let c = cleaned.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
+  if (!c.startsWith("{")) {
+    const fb = c.indexOf("{");
+    const lb = c.lastIndexOf("}");
+    if (fb !== -1 && lb !== -1 && lb > fb) c = c.slice(fb, lb + 1);
+  }
+  try {
+    const p = JSON.parse(c) as { name: string; arguments?: Record<string, unknown> };
+    if (p.name) return { name: p.name, arguments: p.arguments || {} };
+  } catch (_e) { void _e; }
+  const lenient = parseLenientWriteFile(c) || parseLenientEditFile(c);
+  if (lenient) return { name: lenient.name, arguments: lenient.arguments as Record<string, unknown> };
+  const match = c.match(/\{[\s\S]*"name"\s*:\s*"[^"]+"[\s\S]*\}/);
+  if (match) try { const p2 = JSON.parse(match[0]) as { name: string; arguments?: Record<string, unknown> }; if (p2.name) return { name: p2.name, arguments: p2.arguments || {} }; } catch (_e2) { void _e2; }
+  return null;
+}
+
 export function parseModelResponseMulti(rawText: string): Array<{ name: string; arguments: Record<string, unknown> }> {
   const norm = rawText.replace(/\u00A0/g, " ").replace(/[\u200B\uFEFF]/g, "").replace(/\r/g, "");
   const re = /<<<TOOL_CALL>>>([\s\S]*?)<<<END_TOOL_CALL>>>/g;
   const calls: Array<{ name: string; arguments: Record<string, unknown> }> = [];
   let m: RegExpExecArray | null;
   while ((m = re.exec(norm)) !== null) {
-    let cleaned = (m[1] ?? "").trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/i, "").trim();
-    if (!cleaned.startsWith("{")) {
-      const fb = cleaned.indexOf("{");
-      const lb = cleaned.lastIndexOf("}");
-      if (fb !== -1 && lb !== -1 && lb > fb) cleaned = cleaned.slice(fb, lb + 1);
+    const parsed = tryParseBlock(m[1] ?? "");
+    if (parsed) calls.push(parsed);
+  }
+  // Fallback tolerante: texto previo + TOOL_CALL sin END (caso landing bloqueado)
+  if (calls.length === 0 && norm.includes("<<<TOOL_CALL>>>")) {
+    const startIdx = norm.indexOf("<<<TOOL_CALL>>>");
+    let after = norm.slice(startIdx + "<<<TOOL_CALL>>>".length);
+    // Si hay END, ya se habría parseado; sin END, tomar hasta último } balanceado
+    const fb = after.indexOf("{");
+    const lb = after.lastIndexOf("}");
+    if (fb !== -1 && lb !== -1 && lb > fb) {
+      after = after.slice(fb, lb + 1);
+      const parsed = tryParseBlock(after);
+      if (parsed) calls.push(parsed);
     }
-    try {
-      const p = JSON.parse(cleaned) as { name: string; arguments?: Record<string, unknown> };
-      if (p.name) { calls.push({ name: p.name, arguments: p.arguments || {} }); continue; }
-    } catch (_e) { void _e; }
-    const lenient = parseLenientWriteFile(cleaned) || parseLenientEditFile(cleaned);
-    if (lenient) { calls.push({ name: lenient.name, arguments: lenient.arguments }); continue; }
-    const match = cleaned.match(/\{[\s\S]*"name"\s*:\s*"[^"]+"[\s\S]*\}/);
-    if (match) try { const p2 = JSON.parse(match[0]) as { name: string; arguments?: Record<string, unknown> }; if (p2.name) calls.push({ name: p2.name, arguments: p2.arguments || {} }); } catch (_e2) { void _e2; }
   }
   return calls;
 }
@@ -100,8 +128,21 @@ export function parseModelResponse(
     const m = norm.match(/<<<\s*END_TOOL_CALL\s*>>>/);
     if (m && m.index !== undefined) endIdx = m.index;
   }
-  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx)
+  if (startIdx === -1 || endIdx === -1 || endIdx < startIdx) {
+    // Fallback sin END: intenta extraer JSON tras START hasta último } (caso truncado)
+    if (startIdx !== -1) {
+      let after = norm.slice(startIdx + (norm.slice(startIdx).startsWith(TOOL_CALL_START) ? TOOL_CALL_START.length : (norm.match(/<<<\s*TOOL_CALL\s*>>>/)?.[0].length ?? TOOL_CALL_START.length)));
+      const fb = after.indexOf("{");
+      const lb = after.lastIndexOf("}");
+      if (fb !== -1 && lb !== -1 && lb > fb) {
+        const cleaned2 = after.slice(fb, lb + 1).trim();
+        try { const p = JSON.parse(cleaned2) as { name: string; arguments?: Record<string, unknown> }; if (p.name) return { isToolCall: true, name: p.name, arguments: p.arguments || {} }; } catch (_e) { void _e; }
+        const lenient2 = parseLenientWriteFile(cleaned2) || parseLenientEditFile(cleaned2);
+        if (lenient2) return lenient2;
+      }
+    }
     return { isToolCall: false, content: norm.trim() };
+  }
   const startLen = norm.slice(startIdx).startsWith(TOOL_CALL_START)
     ? TOOL_CALL_START.length
     : (norm.match(/<<<\s*TOOL_CALL\s*>>>/)?.[0].length ?? TOOL_CALL_START.length);

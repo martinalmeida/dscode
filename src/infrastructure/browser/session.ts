@@ -31,9 +31,11 @@ export async function createSession(config: SessionConfig): Promise<Session> {
   if (chromiumExecutablePath) launchOptions.executablePath = chromiumExecutablePath;
   log.debug({ headless: launchOptions.headless }, "[chromium] Lanzando");
   const browser = await chromium.launch(launchOptions);
-  let contextOptions: { storageState?: string } = {};
+  let contextOptions: { storageState?: string; permissions?: string[] } = {};
   if (fs.existsSync(storageStatePath)) contextOptions.storageState = storageStatePath;
   else log.warn({ storageStatePath }, "storageState no existe, se inicia sin sesión guardada");
+  // Clipboard necesario para fallback de payloads grandes (24k) vía Ctrl+V
+  (contextOptions as { permissions?: string[] }).permissions = ["clipboard-read", "clipboard-write"];
   const context = await browser.newContext(contextOptions as never);
   const page = await context.newPage();
   await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
@@ -60,6 +62,31 @@ async function checkForCloudflareChallenge(page: import("playwright").Page): Pro
     );
 }
 
+async function resolveTextarea(page: import("playwright").Page): Promise<import("playwright").Locator> {
+  // Prioriza elemento visible con tamaño real (>10px) para evitar hidden textarea espejo (Lexical off-screen)
+  const candidates = [
+    'div[contenteditable="true"][role="textbox"]:not([aria-hidden="true"])',
+    'div[contenteditable="true"]:not([aria-hidden="true"])',
+    'textarea#chat-input:not([aria-hidden="true"])',
+    'textarea[placeholder*="Ask" i]:not([aria-hidden="true"])',
+    'textarea[placeholder*="Message" i]:not([aria-hidden="true"])',
+  ];
+  for (const sel of candidates) {
+    const loc = page.locator(sel);
+    const cnt = await loc.count().catch(() => 0);
+    for (let i = 0; i < cnt; i++) {
+      const el = loc.nth(i);
+      if (!(await el.isVisible().catch(() => false))) continue;
+      const box = await el.boundingBox().catch(() => null);
+      if (box && box.width > 10 && box.height > 10) return el;
+      // Si no hay box pero es visible, igual sirve (algunos contenteditable reportan null box en headless)
+      if (!box) return el;
+    }
+  }
+  // Fallback: primer match del selector compuesto (mantiene compat)
+  return page.locator(SELECTORS.textarea).first();
+}
+
 export async function sendMessage(
   session: Session,
   text: string,
@@ -67,10 +94,169 @@ export async function sendMessage(
 ): Promise<string> {
   const { page } = session;
   await checkForCloudflareChallenge(page);
-  const textarea = page.locator(SELECTORS.textarea).first();
+  let textarea = await resolveTextarea(page);
   await textarea.waitFor({ state: "visible", timeout: 30000 });
-  await textarea.click();
-  await textarea.fill(text);
+  // Heavy: evaluate para textos largos (fill valida char por char y revienta con 15k+ systemPrompt)
+  const useEvaluate = text.length > 3500;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await textarea.click().catch(() => {});
+      // Re-resolver en reintentos por si cambió el DOM
+      if (attempt > 0) {
+        await page.waitForTimeout(400);
+        textarea = await resolveTextarea(page);
+        await textarea.waitFor({ state: "visible", timeout: 10000 }).catch(() => {});
+        await textarea.click().catch(() => {});
+      }
+      if (useEvaluate) {
+        if (attempt === 0) {
+          // Intento 0: native setter + InputEvent con data (React controlled)
+          await textarea.evaluate((el: HTMLElement, v: string) => {
+            el.focus();
+            const isInput = el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement;
+            if (isInput) {
+              const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              const desc = Object.getOwnPropertyDescriptor(proto, "value");
+              try {
+                desc?.set?.call(el, v);
+              } catch (_e) {
+                (el as HTMLTextAreaElement).value = v;
+              }
+              // React _valueTracker
+              try {
+                const tracker = (el as unknown as { _valueTracker?: { setValue: (x: string) => void } })._valueTracker;
+                if (tracker) tracker.setValue("");
+              } catch (_e) {
+                void _e;
+              }
+              try {
+                el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+              } catch (_e) {
+                void _e;
+              }
+              el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            } else {
+              // contenteditable (Lexical/ProseMirror)
+              el.focus();
+              // Intentar execCommand primero (más trusted por editores)
+              let inserted = false;
+              try {
+                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+                // @ts-ignore execCommand deprecated pero aún trusted por Lexical
+                if (document.queryCommandSupported && document.queryCommandSupported("insertText")) {
+                  (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("selectAll", false, "");
+                  inserted = (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("insertText", false, v);
+                }
+              } catch (_e) {
+                void _e;
+              }
+              if (!inserted || (el.textContent ?? "").length === 0) {
+                // Fallback: construir DOM manualmente
+                el.textContent = "";
+                // Lexical espera <p> por línea
+                const frag = document.createDocumentFragment();
+                const lines = v.split("\n");
+                for (const line of lines) {
+                  const p = document.createElement("p");
+                  p.textContent = line || "\u200B"; // zero-width para líneas vacías
+                  frag.appendChild(p);
+                }
+                el.appendChild(frag);
+                try {
+                  el.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+                } catch (_e) {
+                  void _e;
+                }
+                el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+              } else {
+                el.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: v } as unknown as InputEventInit));
+              }
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            }
+          }, text);
+        } else if (attempt === 1) {
+          // Intento 1: clipboard + paste (humano)
+          try {
+            await page.evaluate((v: string) => navigator.clipboard.writeText(v), text);
+          } catch (_e) {
+            void _e;
+          }
+          await textarea.click().catch(() => {});
+          await page.keyboard.press("Control+A").catch(() => {});
+          await page.waitForTimeout(80);
+          // Intentar dispatch paste sintético + Ctrl+V
+          try {
+            await page.keyboard.press("Control+V");
+          } catch (_e) {
+            void _e;
+          }
+          await page.waitForTimeout(200);
+          // Si sigue 0, fallback a execCommand directo
+          const curLen = await textarea
+            .evaluate((el: HTMLElement) => {
+              const v = (el as HTMLTextAreaElement).value;
+              if (typeof v === "string" && v.length > 0) return v.length;
+              return (el.textContent ?? "").length || ((el as HTMLElement).innerText ?? "").length;
+            })
+            .catch(() => 0);
+          if (curLen === 0) {
+            await textarea.evaluate((el: HTMLElement, v: string) => {
+              el.focus();
+              try {
+                (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("selectAll", false, "");
+                (document as unknown as { execCommand: (a: string, b: boolean, c: string) => boolean }).execCommand("insertText", false, v);
+              } catch (_e) {
+                el.textContent = v;
+                el.dispatchEvent(new Event("input", { bubbles: true }));
+              }
+            }, text);
+          }
+        } else {
+          // Intento 2: último recurso — fill chunked no usado antes, pero aquí type con delay
+          await textarea.evaluate((el: HTMLElement, v: string) => {
+            el.focus();
+            if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) {
+              const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+              Object.getOwnPropertyDescriptor(proto, "value")?.set?.call(el, v);
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+            } else el.textContent = v;
+          }, text);
+        }
+        await page.waitForTimeout(180);
+        // Verificación: ¿realmente quedó el texto?
+        const actualLen = await textarea
+          .evaluate((el: HTMLElement) => {
+            const val = (el as HTMLTextAreaElement).value;
+            if (typeof val === "string" && val.length > 0) return val.length;
+            const txt = (el.textContent ?? "").length;
+            const inner = ((el as HTMLElement).innerText ?? "").length;
+            // Para contenteditable con <p> por línea, textContent incluye todo; innerText también
+            return Math.max(txt, inner, val?.length ?? 0);
+          })
+          .catch(() => -1);
+        if (actualLen !== -1 && Math.abs(actualLen - text.length) > Math.max(200, text.length * 0.1)) {
+          log.warn({ expected: text.length, actual: actualLen, attempt }, "textarea evaluate longitud no coincide — reintentando");
+          throw new Error(`textarea mismatch ${actualLen} vs ${text.length}`);
+        }
+      } else await textarea.fill(text);
+      break;
+    } catch (err) {
+      const msg = ((err as Error).message || "").slice(0, 400);
+      if (attempt === 2) throw new Error(msg);
+      log.warn({ err: msg, useEvaluate, attempt }, "textarea click/fill reintento");
+      await page.waitForTimeout(800);
+    }
+  }
+  // Detección temprana de sesión expirada: si seguimos en /login no hay donde enviar
+  try {
+    const url = page.url();
+    if (url.includes("/login") || url.includes("/auth")) {
+      throw new Error(`Sesión expirada — redirigido a ${url}. Corre 'dscode login' para renovar storage-state.json`);
+    }
+  } catch (e) {
+    if ((e as Error).message.includes("Sesión expirada")) throw e;
+  }
   const countBefore = await page.locator(SELECTORS.assistantMessage).count();
   let initialLastText = "";
   if (countBefore > 0) {
@@ -86,16 +272,46 @@ export async function sendMessage(
   const sendButton = page.locator(SELECTORS.sendButton).first();
   const hasSendButton = (await sendButton.count()) > 0;
   if (hasSendButton) {
-    await page
-      .waitForFunction(
-        (selector: string) => {
-          const el = document.querySelector(selector);
-          return el && !el.className.includes("disabled");
-        },
-        SELECTORS.sendButton,
-        { timeout: 3000 }
-      )
-      .catch((e) => log.debug({ err: e }, "sendButton waitFunction timeout"));
+    // SELECTORS.sendButton contiene :has-text que no es válido en document.querySelector — filtrar a CSS puro para waitForFunction
+    const cssOnly = SELECTORS.sendButton
+      .split(",")
+      .map((s) => s.trim())
+      .filter((s) => !s.includes("has-text") && !s.includes("text="))
+      .join(", ");
+    if (cssOnly) {
+      await page
+        .waitForFunction(
+          (selector: string) => {
+            const els = document.querySelectorAll(selector);
+            for (const el of Array.from(els)) {
+              const he = el as HTMLElement;
+              if (!he.offsetParent) continue; // hidden
+              if (he.className.includes("disabled")) continue;
+              if ((he as HTMLButtonElement).disabled) continue;
+              if (he.getAttribute("aria-disabled") === "true") continue;
+              return true;
+            }
+            return false;
+          },
+          cssOnly,
+          { timeout: 4000 }
+        )
+        .catch((e) => log.debug({ err: e }, "sendButton waitFunction timeout"));
+    }
+    // Si sigue disabled, no esperar 300s — fallar rápido y reintentar
+    const stillDisabled = await sendButton
+      .evaluate((el: HTMLElement) => {
+        if (el.className.includes("disabled")) return true;
+        if ((el as HTMLButtonElement).disabled) return true;
+        if (el.getAttribute("aria-disabled") === "true") return true;
+        return false;
+      })
+      .catch(() => false);
+    if (stillDisabled) {
+      // No hacer click ciego que nunca genera request → lanzar mismatch para que sendWithRetry pruebe fallback clipboard/execCommand
+      log.warn("sendButton sigue disabled tras evaluate — posible textarea no propagado");
+      throw new Error(`textarea mismatch sendButton disabled (stillDisabled) — textarea no propagado`);
+    }
     await sendButton.click();
   } else await textarea.press("Enter");
   if (opts.onSubmitted) opts.onSubmitted();

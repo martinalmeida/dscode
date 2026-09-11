@@ -50,11 +50,12 @@ async function runAgentSession(): Promise<void> {
   const initialMode = process.argv.includes("--plan") ? ("plan" as const) : ("build" as const);
 
   printBanner();
-  const { systemPromptSection, loadedFiles } = await loadProjectContext(workspaceDir);
+  const { systemPromptSection, loadedFiles, truncated } = await loadProjectContext(workspaceDir);
   const ctxInfo = loadedFiles.length > 0 ? loadedFiles.join(", ") : "sin contexto";
-  // Header compacto en 2 líneas
+  const truncHint = truncated ? ` \x1b[33m[contexto truncado ${truncated.before}→${truncated.cap}]\x1b[0m` : "";
+  // Header compacto en 2 líneas — hint amarillo si hubo truncado (visible sin mirar stderr)
   console.log(
-    `\x1b[2m${PRODUCT_NAME} v${PACKAGE_JSON.version}  \x1b[0m\x1b[36m${projectName}\x1b[0m \x1b[2m${workspaceDir} · ${ctxInfo}\x1b[0m`
+    `\x1b[2m${PRODUCT_NAME} v${PACKAGE_JSON.version}  \x1b[0m\x1b[36m${projectName}\x1b[0m \x1b[2m${workspaceDir} · ${ctxInfo}${truncHint}\x1b[0m`
   );
 
   let client: ReturnType<typeof createModelClient>;

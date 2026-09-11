@@ -29,6 +29,7 @@
     "playwright": "^1.47.0"
   },
   "devDependencies": {
+    "@types/node": "^22.20.2",
     "@typescript-eslint/eslint-plugin": "^8.70.0",
     "@typescript-eslint/parser": "^8.70.0",
     "eslint": "^9.39.5",

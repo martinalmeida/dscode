@@ -4,19 +4,19 @@ import { resolveSafe } from "../../../../shared/safePath.js";
 import type { ToolContext, ToolDefinition } from "../../types.js";
 import { APP_CONSTANTS } from "../../../../shared/constants.js";
 
-const MAX_PATHS = 20;
+const MAX_PATHS = APP_CONSTANTS.READ_MANY_LIMIT;
 
 export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
   name: "read_many_files",
   description:
-    "Lee múltiples archivos en un solo llamado batch. Ideal para proyectos grandes/polyglot: pasa 5-20 rutas y obtienes todos los contenidos concatenados. Respeta workspace + IGNORED_DIRS para glob, pero sí lee dotfiles (.env) si los pides explícitamente.",
+    "Lee múltiples archivos en un solo llamado batch. Ideal para proyectos grandes/polyglot: pasa 5-40 rutas y obtienes todos los contenidos concatenados. Respeta workspace + IGNORED_DIRS para glob, pero sí lee dotfiles (.env) si los pides explícitamente.",
   readOnly: true,
   schema: {
     type: "function",
     function: {
       name: "read_many_files",
       description:
-        "Lee múltiples archivos en batch. Pasa un array de rutas relativas al workspace (ej: [\"src/index.ts\",\"src/app/agent/prompt.ts\",\".env\"]). Máx 20 por llamado.",
+        "Lee múltiples archivos en batch. Pasa un array de rutas relativas al workspace (ej: [\"src/index.ts\",\"src/app/agent/prompt.ts\",\".env\"]). Máx 40 por llamado (configurable via DSCODE_READ_MANY_LIMIT).",
       parameters: {
         type: "object",
         properties: {
@@ -24,7 +24,7 @@ export const readManyFilesTool: ToolDefinition<{ paths: string[] }> = {
             type: "array",
             items: { type: "string" },
             description:
-              'Rutas relativas al workspace. Cualquier extensión/nombre, incluidos dotfiles (.env) si los incluyes explícitamente. Máx 20.',
+              'Rutas relativas al workspace. Cualquier extensión/nombre, incluidos dotfiles (.env) si los incluyes explícitamente. Máx 40 (DSCODE_READ_MANY_LIMIT).',
           },
         },
         required: ["paths"],
