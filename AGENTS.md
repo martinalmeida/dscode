@@ -1,10 +1,10 @@
-# AGENTS.md — dscode 3.5.1
+# AGENTS.md — dscode 3.9.1
 
 ## Propósito
 
 `dscode` es un agente de código para terminal que trabaja sobre el **workspace actual** y utiliza DeepSeek Web mediante Playwright. Está pensado para instalarse una vez y ejecutarse desde cualquier proyecto con `npm link`.
 
-La versión 3.5.1 mantiene el núcleo de confiabilidad de 3.0/3.1, la experiencia CLI de 3.2 y añade el núcleo de confiabilidad/Recovery de 3.3 más el DeepSeek DOM Adapter/Inspector de 3.4/3.5, mientras deja la documentación alineada con el código real.
+La versión 3.9.1 mantiene el núcleo de confiabilidad de 3.0/3.1, la experiencia CLI de 3.2, el Recovery/DOM Adapter de 3.3-3.5 y suma los guards y la verificación endurecida de 3.6-3.9 (iteraciones 40, snapshots invalidados, `EDIT_CONFLICT` con recovery, `run_command` sin falsos positivos, `RESPONSE_TIMEOUT` auto-recovery, `delete_file`/Compose protegidos y `taskObjective` consciente de intención), con la documentación alineada al código real.
 
 ## Instalación y uso
 
@@ -124,8 +124,8 @@ src/
 - `infrastructure/deepseek/domAdapter.ts`: adaptador DOM basado en capturas reales (`DeepSeekDomAdapter`, snapshot, `waitUntilReady`, detección de estado).
 - `infrastructure/deepseek/diagnostics/`: inspector permanente de la UI real de DeepSeek. Captura HTML, screenshot opcional, inventario interactivo, señales observables y cambios del DOM; no se usa en el flujo normal del agente.
 - `infrastructure/providers/`: comunicación con DeepSeek Web y protocolo de tool-calling (usa `domAdapter` y `selectors`).
-- `ui/banner.ts`: cabecera 3.5.1 con marca DeepSeek, versión, workspace, branch, `AGENTS.md` y modo PLAN/BUILD.
-- `ui/recoveryPrompt.ts`: menú interactivo de recuperación (`retry`/`new_chat`/`pause`/`cancel`).
+- `ui/banner.ts`: cabecera 3.9.1 con marca DeepSeek, versión, workspace, branch, `AGENTS.md` y modo PLAN/BUILD.
+- `ui/recoveryPrompt.ts`: menú interactivo de recuperación (`retry`/`new_chat`/`pause`/`cancel`) con pausa de `input`/`spinner` durante `RESPONSE_TIMEOUT`.
 - `ui/`: REPL, modo PLAN/BUILD, historial y salida compacta.
 
 ## Flujo de una tarea
@@ -153,9 +153,14 @@ Antes de modificar un archivo existente:
 
 Las mutaciones (`write_file`, `edit_file`, `apply_patch` y `delete_file`) utilizan transacciones y snapshots.
 
-Si el archivo cambió entre la lectura y la edición, el hash actual no coincide con `expected_hash` y la operación se rechaza con un conflicto de edición. Esto evita sobrescribir silenciosamente cambios externos.
+Si el archivo cambió entre la lectura y la edición, el hash actual no coincide con `expected_hash` y la operación se rechaza con un conflicto de edición. Esto evita sobrescribir silenciosamente cambios externos. Desde 3.6, `run_command` invalida snapshots de archivos tocados y `EDIT_CONFLICT` hace recovery marcando el snapshot como `null` (`src/app/agent/agent.ts:354`).
 
-Una mutación tampoco se considera completada solo porque la herramienta respondió: debe existir evidencia física de cambio (`changed=true`) y después ejecutarse la verificación correspondiente.
+Una mutación tampoco se considera completada solo porque la herramienta respondió: debe existir evidencia física de cambio (`changed=true`) y después ejecutarse la verificación correspondiente (incluye `docker compose config`/`podman compose config` cuando hay `docker-compose.yml`/`compose.yml` tocado — `src/domain/verification/verifier.ts:45`).
+
+Guards adicionales (3.8—3.9.1):
+- `run_command` bloquea mutaciones directas por shell (`rm`, `sed -i`, `perl -i`, redirecciones, `git reset`/`restore` no solicitado) y evita falsos positivos en `ls|grep|cat` (`src/domain/tools/definitions/runCommand/runCommand.tool.ts:1`).
+- `delete_file` bloquea borrados no solicitados, especialmente configs críticas; `taskObjective` viaja en `ToolContext` para políticas conscientes de intención (`src/domain/tools/types.ts:7`).
+- Compose: tras un `docker/podman compose` fallido, no se permite reescribir `docker-compose.yml`/`compose.yml` hasta validar con `docker compose config` (`src/app/agent/agent.ts:400`).
 
 ## Presupuestos
 
@@ -163,7 +168,7 @@ Valores por defecto definidos en `src/shared/constants.ts`:
 
 | Límite | Por defecto |
 |---|---:|
-| Iteraciones de tools | 30 |
+| Iteraciones de tools | 40 |
 | Lecturas por archivo | 4 |
 | Lecturas totales por tarea | 12 |
 | Lectura máxima de archivo | 40.000 caracteres |

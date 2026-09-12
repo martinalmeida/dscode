@@ -203,7 +203,14 @@ export function startPromptLoop(opts: {
   if (process.stdin.isTTY) process.stdin.on("keypress", onKeypress);
 
   function pauseInput(): void {
-    if (process.stdin.isTTY) process.stdin.off("keypress", onKeypress);
+    if (process.stdin.isTTY) {
+      process.stdin.off("keypress", onKeypress);
+      try {
+        (process.stdin as unknown as { setRawMode: (v: boolean) => void }).setRawMode(false);
+      } catch {
+        // ignore terminal mode errors
+      }
+    }
     try {
       while (process.stdin.read() !== null) void 0;
     } catch {

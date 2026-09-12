@@ -44,10 +44,10 @@ export function classifyLLMError(error: unknown): LLMErrorInfo {
     return {
       code: "AUTH_REQUIRED",
       message,
-      retryable: false,
+      retryable: true,
       canReuseSameRequest: true,
       canReuseSameChat: false,
-      requiresNewChat: false,
+      requiresNewChat: true,
     };
   if (code === "CLOUDFLARE_CHALLENGE" || /Cloudflare|Turnstile/i.test(message))
     return {

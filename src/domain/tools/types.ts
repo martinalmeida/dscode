@@ -4,6 +4,7 @@ export type ToolMode = "plan" | "build";
 
 export interface ToolContext {
   workspaceDir: string;
+  taskObjective?: string;
   mode?: ToolMode;
   logger?: Logger;
   pauseInput?: () => void;

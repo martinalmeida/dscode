@@ -45,6 +45,18 @@ try {
               choices: [{ message: {
                 role: "assistant",
                 content: null,
+                tool_calls: [{ id: "call_r", function: {
+                  name: "read_file",
+                  arguments: JSON.stringify({ path: "src/App.tsx" }),
+                } }],
+              } }],
+            };
+          }
+          if (turn === 2) {
+            return {
+              choices: [{ message: {
+                role: "assistant",
+                content: null,
                 tool_calls: [{ id: "call_1", function: {
                   name: "edit_file",
                   arguments: JSON.stringify({
@@ -68,7 +80,7 @@ try {
   const final = await fs.readFile(path.join(workspace, "src", "App.tsx"), "utf8");
   assert.match(final, /Hello from dscode v3/);
   assert.match(response, /verificado/i);
-  assert.ok(turn >= 2, "el agente debe pedir una segunda respuesta después de ejecutar la mutación");
+  assert.ok(turn >= 3, "el agente debe pedir respuestas adicionales después de leer y ejecutar la mutación");
   await agent.close();
 
   // Runtime-managed EditIntent: a file changed externally after read_file must not be overwritten.
@@ -97,6 +109,45 @@ try {
   await conflictAgent.close();
 } finally {
   await fs.rm(workspace, { recursive: true, force: true });
+}
+
+
+// Command failures must remain recoverable and must not be presented as completed.
+const commandWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-v3-command-"));
+try {
+  let commandTurn = 0;
+  const commandClient = {
+    chat: {
+      completions: {
+        create: async () => {
+          commandTurn += 1;
+          if (commandTurn === 1) {
+            return { choices: [{ message: { role: "assistant", content: null, tool_calls: [{ id: "cmd_1", function: { name: "run_command", arguments: JSON.stringify({ command: "node -e \"process.exit(7)\"" }) } }] } }] };
+          }
+          return { choices: [{ message: { role: "assistant", content: "El comando falló y requiere corrección." } }] };
+        },
+      },
+    },
+    close: async () => undefined,
+  };
+  const commandAgent = new Agent({ client: commandClient, workspaceDir: commandWorkspace, systemPromptContext: "Proyecto de prueba", mode: "build" });
+  const commandResponse = await commandAgent.run("ejecuta el comando de prueba");
+  assert.match(commandResponse, /No se pudo completar|requiere corrección|fall/i);
+  await commandAgent.close();
+} finally {
+  await fs.rm(commandWorkspace, { recursive: true, force: true });
+}
+
+const { verifyWorkspace } = await import("../dist/domain/verification/verifier.js");
+const composeWorkspace = await fs.mkdtemp(path.join(os.tmpdir(), "dscode-v3-compose-"));
+try {
+  await fs.writeFile(path.join(composeWorkspace, "docker-compose.yml"), "services:\n  broken:\n    image: [invalid\n", "utf8");
+  const composeSnapshot = { path: "docker-compose.yml", absolutePath: path.join(composeWorkspace, "docker-compose.yml"), exists: true, hash: "x", bytes: 10, lineCount: 3 };
+  const verification = await verifyWorkspace(composeWorkspace, [composeSnapshot]);
+  assert.equal(verification.passed, false, "compose inválido no debe marcar verificación completa");
+  assert.match(verification.checks.join("\n"), /compose|FAIL/i);
+} finally {
+  await fs.rm(composeWorkspace, { recursive: true, force: true });
 }
 
 console.log("dscode reliability tests: OK");

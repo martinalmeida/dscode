@@ -4,7 +4,7 @@
 
 `dscode` trabaja sobre el proyecto que indiques como workspace y combina exploración, edición y verificación en un flujo controlado. Está diseñado para instalarse una sola vez y utilizarse desde cualquier proyecto.
 
-> **Versión:** 3.5.1
+> **Versión:** 3.9.1
 
 ## ✨ Qué ofrece
 
@@ -22,6 +22,11 @@
 - Recuperación tolerante a fallos de DeepSeek (retry, rotación de chat, menú interactivo).
 - `DeepSeekDomAdapter` basado en capturas reales del DOM (composer, mensajes y señales de estado).
 - Inspector `dscode deepseek inspect` para diagnosticar cambios de la UI sin tocar el adaptador de producción.
+- Guard de `run_command` sin falsos positivos para comandos de lectura y bloqueo de mutaciones directas (`rm`, `sed -i`, redirecciones, `git restore` no solicitado).
+- Protección de archivos de configuración críticos (`delete_file` y reescritura de `docker-compose.yml`/`compose.yml` bloqueadas hasta validar).
+- Verificación física extendida: `docker compose config` / `podman compose config` como fuente de verdad para Compose + `typecheck`/`lint`/`build` según el proyecto.
+- Recovery automático para `RESPONSE_TIMEOUT` (nuevo chat + retry) y menú de recuperación que pausa `input`/`spinner`.
+- Persistencia de contexto `PLAN → BUILD` (`ok`/`aplicar` retoma el plan aprobado) y manejo de `EDIT_CONFLICT`/`snapshot stale` sin reutilizar hashes obsoletos.
 
 ## 🚀 Instalación
 
@@ -83,17 +88,17 @@ Puedes cambiar de modo con `Tab` o mediante `/plan` y `/build`.
 
 ## 🖥️ Interfaz de la CLI
 
-La cabecera de 3.5.1 usa una interfaz inspirada en las CLIs modernas de agentes de código: marca visual de DeepSeek, versión, sesión, motor Web/Playwright, workspace y estado de `AGENTS.md`. Debajo muestra el flujo del agente y los comandos disponibles, manteniendo el prompt `PLAN/BUILD` compacto.
+La cabecera de 3.9.1 usa una interfaz inspirada en las CLIs modernas de agentes de código: marca visual de DeepSeek, versión, sesión, motor Web/Playwright, workspace y estado de `AGENTS.md`. Debajo muestra el flujo del agente y los comandos disponibles, manteniendo el prompt `PLAN/BUILD` compacto.
 
 Ejemplo conceptual:
 
 ```text
-      [marca DeepSeek]       dscode v3.5.1
-                              Powered by DeepSeek
-                              ● DeepSeek Web
-                              ◉ DeepSeek Chat (Web · Playwright)
-                              ▣ /ruta/al/proyecto
-                              ▤ AGENTS.md cargado
+      [marca DeepSeek]       dscode v3.9.1
+                               Powered by DeepSeek
+                               ● DeepSeek Web
+                               ◉ DeepSeek Chat (Web · Playwright)
+                               ▣ /ruta/al/proyecto
+                               ▤ AGENTS.md cargado
 
   ─────────────────────────────────────────────────────────────
   Tu agente de desarrollo en la terminal.
@@ -219,7 +224,7 @@ CHROMIUM_EXECUTABLE_PATH=
 ```dotenv
 DSCODE_MAX_CONTEXT_CHARS=5000
 DSCODE_MAX_SEND_CHARS=16000
-DSCODE_MAX_TOOL_ITERATIONS=30
+DSCODE_MAX_TOOL_ITERATIONS=40
 DSCODE_MAX_FILE_READ_CHARS=40000
 DSCODE_MAX_TOOL_RESULT_CHARS=24000
 DSCODE_MAX_READS_PER_FILE=4
@@ -257,7 +262,7 @@ Las tareas se persisten bajo `~/.dscode/tasks/<workspace-hash>/<taskId>/` con `s
 
 ### `MODEL_PROVIDER`
 
-Es una variable heredada/deprecada. La implementación 3.5.1 utiliza **solo DeepSeek Web mediante Playwright**. Si queda `MODEL_PROVIDER=api` de una configuración antigua, dscode la ignora y muestra un aviso.
+Es una variable heredada/deprecada. La implementación 3.9.1 utiliza **solo DeepSeek Web mediante Playwright**. Si queda `MODEL_PROVIDER=api` de una configuración antigua, dscode la ignora y muestra un aviso.
 
 ## 🖥️ Chromium
 
@@ -322,6 +327,14 @@ Consulta [`CHANGELOG.md`](./CHANGELOG.md) para el historial de versiones.
 ## Licencia
 
 No se declara una licencia en este repositorio. Añade una licencia explícita antes de distribuir `dscode` como software de terceros.
+
+## Novedades 3.6 — 3.9.1
+
+- **3.9.1:** `git restore`/`git checkout -- <archivo>` solo cuando la tarea lo solicita; `taskObjective` en `ToolContext` para políticas conscientes de intención; `delete_file` bloquea borrados no solicitados de configs críticas (`src/domain/tools/types.ts:7`, `src/domain/tools/definitions/deleteFile/deleteFile.tool.ts:1`).
+- **3.9.0:** `run_command` sin falsos positivos para `ls|grep|cat`; `RESPONSE_TIMEOUT` hace `recoverNewChat` automático una vez antes de pedir decisión; recovery prompt pausa `input`/`spinner`; guard de infraestructura para `docker-compose.yml`/`compose.yml` (`src/domain/tools/definitions/runCommand/runCommand.tool.ts:1`, `src/app/agent/agent.ts:163`).
+- **3.8.0:** bloqueo de mutaciones por shell (`rm`, `sed -i`, redirecciones, scripts de escritura) y guard que exige `docker compose config` antes de reescribir Compose tras un fallo (`src/shared/constants.ts:2`, `src/domain/verification/verifier.ts:45`).
+- **3.7.x:** verificador de Compose dedicado y `run_command` con `exitCode` no-cero fuerza `repair`; ya no se delega al usuario el comando fallido (`src/domain/verification/verifier.ts:70`).
+- **3.6.0:** `pendingPlan` mantiene el contexto de `PLAN` al confirmar con `ok`/`aplicar`; snapshots invalidados tras `run_command` que toca archivos leídos; `EDIT_CONFLICT` con recovery sin reutilizar hashes (`src/app/agent/taskState.ts:1`, `src/app/agent/agent.ts:354`).
 
 ## Reliability and DeepSeek recovery (v3.3+)
 

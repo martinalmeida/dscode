@@ -44,6 +44,18 @@ export const deleteFileTool: ToolDefinition<{ path: string; expected_hash?: stri
     if (full === path.resolve(ctx.workspaceDir))
       return "Error: no se puede eliminar la raíz del workspace.";
 
+    const objective = ctx.taskObjective ?? "";
+    const explicitlyDeleting = /\b(?:elimin(?:a|ar|e)?|borr(?:a|ar|e)?|delete|remove|quitar|limpiar\s+(?:el|la|los|las)?\s*archivo(?:s)?)\b/i.test(objective);
+    const criticalConfig = /(?:^|[\/])(?:docker-compose(?:\.[^\/]+)?|compose(?:\.[^\/]+)|package\.json|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|tsconfig(?:\.[^\/]+)?\.json)$/i.test(relPath);
+    if (!explicitlyDeleting) {
+      return [
+        `DELETE_GUARD: no se puede eliminar "${relPath}" porque la petición actual no solicita eliminar/borrar/descartar ese archivo.`,
+        criticalConfig
+          ? "Es un archivo de configuración crítico; restáuralo o modifícalo con una herramienta de edición controlada si ese es el objetivo."
+          : "Confirma la intención en la tarea y vuelve a llamar a delete_file solo si realmente debe desaparecer.",
+      ].join("\n");
+    }
+
     let stat;
     try {
       stat = await fs.lstat(full);

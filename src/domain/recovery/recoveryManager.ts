@@ -25,6 +25,8 @@ export function buildRecoveryPack(
     `last_action: ${task.lastAction}`,
     `last_error: ${task.lastError || "none"}`,
     `verification: ${task.verification ? `${task.verification.passed ? "PASSED" : "FAILED"}: ${task.verification.summary}` : "pending"}`,
+    task.plannedContext ? `planned_objective: ${task.plannedContext.objective}` : "",
+    task.plannedContext ? `planned_summary: ${task.plannedContext.summary.slice(0, 12000)}` : "",
     `reads: ${task.counters.reads}`,
     `edits: ${task.counters.edits}`,
     `failures: ${task.counters.failures}`,

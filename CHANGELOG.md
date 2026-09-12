@@ -1,5 +1,50 @@
 # Changelog
 
+## 3.9.1
+- Permite `git restore` / `git checkout -- <archivo>` únicamente cuando la tarea del usuario solicita explícitamente descartar/restaurar cambios.
+- Bloquea operaciones Git destructivas fuera de ese contexto.
+- Añade `taskObjective` al contexto de tools para aplicar políticas conscientes de intención.
+- Añade protección contra `delete_file` no solicitado, especialmente en archivos de configuración críticos.
+- Mantiene la barrera contra mutaciones directas por shell.
+
+
+## 3.9.0
+
+- Evita falsos positivos del guard de `run_command` para comandos de lectura como `ls | grep | cat`.
+- Los `RESPONSE_TIMEOUT` de DeepSeek Web intentan recuperación automática mediante nuevo chat antes de pedir intervención.
+- El prompt de recuperación pausa input/spinner y evita quedar atrapado en una interfaz superpuesta.
+- Refuerza las reglas de recuperación de archivos de configuración versionados y de diagnósticos de Docker/Podman.
+- Mantiene las protecciones de snapshots y mutaciones controladas de 3.8.0.
+# 3.8.0
+
+- Bloqueo de mutaciones directas de archivos mediante `run_command` (`rm`, `sed -i`, `perl -i`, redirecciones, scripts de escritura, reset/restore de Git).
+- Guard de infraestructura: un fallo de `docker/podman compose` no permite reescribir `docker-compose.yml`/`compose.yml` hasta validar primero la configuración.
+- La verificación de Compose se usa como evidencia para decidir si corresponde reparar YAML o diagnosticar el runtime.
+- Se conserva el flujo PLAN/BUILD, snapshots y verificación física de versiones anteriores.
+
+## 3.7.1
+
+- Fixed TypeScript verification result typing by normalizing `undefined` exit codes to `null`.
+- Bumped package version to 3.7.1.
+
+## 3.7.0
+
+- Verificación específica de Docker Compose para evitar falsos completados por typecheck.
+- Los `run_command` con exit code distinto de cero fuerzan recuperación en BUILD.
+- El agente deja de transferir al usuario comandos fallidos y debe intentar repararlos.
+- Mejor estrategia tras fallos de `apply_patch` y menor dependencia de reescrituras completas.
+- Las tareas operativas (levantar/bajar/ejecutar/verificar) ahora entran en flujo de completado controlado.
+
+# Changelog
+
+## 3.6.0
+
+- Mantiene el contexto aprobado de PLAN al pasar a BUILD con una confirmación breve como `ok`.
+- Invalida snapshots cuando `run_command` modifica archivos previamente leídos.
+- Bloquea mutaciones sobre archivos con snapshot inexistente o stale hasta que se vuelvan a leer.
+- Recupera `EDIT_CONFLICT` sin seguir reutilizando hashes obsoletos.
+- Conserva el wrapping multilinea del CLI introducido en 3.5.2.
+
 ## 3.5.1 — Docs & release polish
 
 - Documentación alineada a código real de 3.5.x: README y AGENTS.md actualizados a v3.5.1.

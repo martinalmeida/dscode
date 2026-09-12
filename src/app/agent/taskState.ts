@@ -21,6 +21,7 @@ export interface TaskState {
   lastAction: string;
   lastError?: string;
   verification?: { passed: boolean; summary: string };
+  plannedContext?: { objective: string; summary: string; createdAt: string };
   counters: { reads: number; edits: number; failures: number; iterations: number };
 }
 
@@ -28,10 +29,13 @@ const EDIT_INTENT =
   /\b(cambia|cambiar|edita|editar|modifica|modificar|arregla|arreglar|corrige|corregir|crea|crear|implementa|implementar|refactoriza|refactorizar|actualiza|actualizar|mejora|mejorar|elimina|eliminar|añade|agrega|agregar|replace|update|fix|refactor|implement|create|delete|remove|add)\b/i;
 const QUESTION_INTENT =
   /^(qué|que|cuál|cual|cómo|como|dónde|donde|por qué|porque|explica|describe|muéstrame|muestrame|dime|which|what|how|where|why|show|explain)\b/i;
+const ACTION_INTENT =
+  /\b(monta|montar|baja|bajar|sube|subir|levanta|levantar|inicia|iniciar|reinicia|reiniciar|ejecuta|ejecutar|corre|correr|instala|instalar|desinstala|desinstalar|verifica|verificar|comprueba|comprobar|configura|configurar|detén|detener|detiene|arranca|arrancar|build|deploy|start|stop|restart|install|run|execute|verify|check)\b/i;
 
 export function createTaskState(objective: string): TaskState {
   const requiresEdit =
     EDIT_INTENT.test(objective) ||
+    ACTION_INTENT.test(objective) ||
     (/landing|front|ui|código|codigo|archivo|proyecto/i.test(objective) &&
       !QUESTION_INTENT.test(objective.trim()));
   return {
@@ -67,7 +71,15 @@ export function buildTaskAnchor(state: TaskState, workspaceDir: string): string 
     `iterations: ${state.counters.iterations}`,
     `reads: ${state.counters.reads}`,
     `read_budget: ${state.counters.reads}/${APP_CONSTANTS.MAX_TOTAL_READS}`,
-    state.editIntent
+    state.plannedContext
+      ? [
+          `planned_objective: ${state.plannedContext.objective}`,
+          `planned_at: ${state.plannedContext.createdAt}`,
+          "planned_summary:",
+          state.plannedContext.summary.slice(0, 6000),
+        ].join("\n")
+      : "planned_context: none",
+        state.editIntent
       ? `edit_intent: ${state.editIntent.path} expected_hash=${state.editIntent.expectedHash ?? "<missing>"}`
       : "edit_intent: none",
     `edits: ${state.counters.edits}`,

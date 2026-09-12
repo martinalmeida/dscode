@@ -15,6 +15,7 @@ import {
   type RecoveryDecision,
 } from "../../domain/recovery/recoveryManager.js";
 import { createHash } from "node:crypto";
+import { EditConflictError } from "../../domain/execution/editTransaction.js";
 
 const _log = createLogger("app:agent");
 
@@ -80,6 +81,13 @@ export class Agent {
   private persistence: TaskPersistence;
   private onRecoveryDecision?: AgentOpts["onRecoveryDecision"];
   private turnCounter = 0;
+  private pendingPlan: { objective: string; summary: string; createdAt: string } | null = null;
+  private infrastructureFailure: {
+    command: string;
+    message: string;
+    kind: "compose" | "command";
+    configEvidence: "unknown" | "config-invalid" | "runtime-failure" | "valid";
+  } | null = null;
   private ioControls: {
     pauseInput?: () => void;
     resumeInput?: () => void;
@@ -153,6 +161,7 @@ export class Agent {
     });
 
     const maxAttempts = 3;
+    let automaticTimeoutRecoveryUsed = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const attemptId = `${turnId}_attempt_${attempt}`;
       persisted.status = "sending";
@@ -204,16 +213,66 @@ export class Agent {
           message: info.message,
         });
 
+        if (info.code === "RESPONSE_TIMEOUT") {
+          // Un timeout de generación en DeepSeek Web puede dejar la UI en un estado
+          // ambiguo. No dejamos al usuario atrapado en el prompt de recuperación:
+          // rotamos chat y reintentamos automáticamente una sola vez.
+          if (!automaticTimeoutRecoveryUsed && this.client.recoverNewChat) {
+            automaticTimeoutRecoveryUsed = true;
+            this.onEvent({
+              type: "deepseek_recovery",
+              name: "response_timeout",
+              message: "DeepSeek tardó demasiado. Reiniciando el chat y reintentando automáticamente…",
+            });
+            if (this.task) {
+              const pack = buildRecoveryPack(this.task, this.workspaceDir, serialized.slice(-12000));
+              const system = this.messages.find((m) => m.role === "system");
+              const user = this.messages.filter((m) => m.role === "user").slice(-1)[0];
+              this.messages = [
+                system ?? {
+                  role: "system",
+                  content: buildSystemPrompt(this.workspaceDir, this.systemPromptContext),
+                },
+                { role: "user", content: pack },
+                ...(user ? [user] : []),
+              ];
+            }
+            await this.client.recoverNewChat();
+            await this.persistence.appendEvent("CHAT_ROTATED", persisted.taskId, {
+              turnId,
+              reason: "RESPONSE_TIMEOUT",
+              decision: "automatic_new_chat",
+            });
+            attempt = 0;
+            continue;
+          }
+          // Si vuelve a ocurrir después de la recuperación automática, recién aquí
+          // ofrecemos control al usuario.
+          this.onEvent({
+            type: "deepseek_recovery",
+            name: "response_timeout_attention",
+            message: "El reintento automático también expiró; necesito una decisión para continuar.",
+          });
+        }
+
         if (info.code === "CONTEXT_EXHAUSTED") {
           await this.persistence.appendEvent("CHAT_CONTEXT_EXHAUSTED", persisted.taskId, {
             turnId,
           });
-          const decision =
-            (await this.onRecoveryDecision?.({
-              code: info.code,
-              message: info.message,
-              options: ["new_chat", "compact_new_chat", "pause", "cancel"],
-            })) ?? "new_chat";
+          this.ioControls.pauseSpinner?.();
+          this.ioControls.pauseInput?.();
+          let decision: RecoveryDecision;
+          try {
+            decision =
+              (await this.onRecoveryDecision?.({
+                code: info.code,
+                message: info.message,
+                options: ["new_chat", "compact_new_chat", "pause", "cancel"],
+              })) ?? "new_chat";
+          } finally {
+            this.ioControls.resumeInput?.();
+            this.ioControls.resumeSpinner?.("Consultando DeepSeek");
+          }
           if (decision === "pause" || decision === "cancel")
             throw new Error(`[DSCODE_${decision.toUpperCase()}] ${info.message}`);
           if (!this.client.recoverNewChat) throw err;
@@ -240,7 +299,7 @@ export class Agent {
           continue;
         }
 
-        if (info.retryable && attempt < maxAttempts) {
+        if (info.retryable && info.code !== "RESPONSE_TIMEOUT" && attempt < maxAttempts) {
           const delay = 750 * 2 ** (attempt - 1);
           this.onEvent({
             type: "deepseek_recovery",
@@ -251,14 +310,22 @@ export class Agent {
           continue;
         }
 
-        const decision = await this.onRecoveryDecision?.({
-          code: info.code,
-          message: info.message,
-          options:
-            info.code === "AUTH_REQUIRED" || info.code === "CLOUDFLARE_CHALLENGE"
-              ? ["retry", "pause", "cancel"]
-              : ["retry", "new_chat", "pause", "cancel"],
-        });
+        this.ioControls.pauseSpinner?.();
+        this.ioControls.pauseInput?.();
+        let decision: RecoveryDecision | undefined;
+        try {
+          decision = await this.onRecoveryDecision?.({
+            code: info.code,
+            message: info.message,
+            options:
+              info.code === "AUTH_REQUIRED" || info.code === "CLOUDFLARE_CHALLENGE"
+                ? ["retry", "pause", "cancel"]
+                : ["retry", "new_chat", "pause", "cancel"],
+          });
+        } finally {
+          this.ioControls.resumeInput?.();
+          this.ioControls.resumeSpinner?.("Consultando DeepSeek");
+        }
         if (decision === "retry") {
           attempt = 0;
           continue;
@@ -284,6 +351,77 @@ export class Agent {
       }
     }
     throw new Error("No se obtuvo respuesta del modelo.");
+  }
+
+  private isBuildConfirmation(input: string): boolean {
+    return /^(ok|okay|aplicar|aplícalo|aplicalo|adelante|continua|continúa|hazlo|ejecuta|sí|si|dale|go|proceed)$/i.test(
+      input.trim()
+    );
+  }
+
+  private async reconcileTrackedSnapshots(reason: string): Promise<string[]> {
+    if (!this.task) return [];
+    const stale: string[] = [];
+    for (const [relPath, expectedHash] of Object.entries(this.task.fileSnapshots)) {
+      if (!expectedHash) continue;
+      try {
+        const current = await snapshotFile(this.workspaceDir, relPath);
+        if (current.hash !== expectedHash) {
+          stale.push(relPath);
+          // null means "known before, but stale now". Never promote an
+          // externally changed file to a fresh edit snapshot without rereading it.
+          this.task.fileSnapshots[relPath] = null;
+          if (this.task.editIntent?.path === relPath) this.task.editIntent = undefined;
+        }
+      } catch (error) {
+        this.toolLog.debug({ relPath, error, reason }, "snapshot_reconcile_failed");
+      }
+    }
+    if (stale.length > 0) {
+      this.task.counters.failures++;
+      this.task.lastError = `Archivo(s) cambiaron fuera del flujo de edición controlada (${reason}): ${stale.join(", ")}`;
+      this.task.phase = "inspect";
+      await this.persistence.appendEvent("TRACKED_SNAPSHOT_STALE", this.task.id, {
+        reason,
+        paths: stale,
+      });
+    }
+    return stale;
+  }
+
+  private async ensureMutationPreconditions(
+    name: string,
+    args: Record<string, unknown>
+  ): Promise<string | null> {
+    if (!MUTATION_TOOLS.has(name)) return null;
+    const relPathForGuard = typeof args.path === "string" ? args.path.trim() : "";
+    const isComposePath = /(?:^|\/)docker-compose\.(?:ya?ml)$|(?:^|\/)compose\.(?:ya?ml)$/i.test(relPathForGuard);
+    if (
+      isComposePath &&
+      this.infrastructureFailure?.kind === "compose" &&
+      this.infrastructureFailure.configEvidence !== "config-invalid"
+    ) {
+      return [
+        `INFRASTRUCTURE_GUARD: no modifiques "${relPathForGuard}" todavía.`,
+        `El último comando de compose falló: ${this.infrastructureFailure.message}`,
+        "Primero ejecuta `docker compose config` o `podman compose config` para demostrar si el problema está en el archivo.",
+        "Si la configuración es válida, diagnostica el fallo del runtime/daemon sin reescribir el compose.",
+      ].join("\n");
+    }
+    const relPath = typeof args.path === "string" ? args.path.trim() : "";
+    if (!relPath) return null;
+    if (name === "write_file" && this.task?.fileSnapshots[relPath] === undefined) return null;
+
+    const stale = await this.reconcileTrackedSnapshots(`antes de ${name}`);
+    if (stale.includes(relPath)) {
+      return `EDIT_STALE: "${relPath}" cambió desde la última lectura conocida. Vuelve a ejecutar read_file sobre ese archivo antes de mutarlo.`;
+    }
+
+    const knownHash = this.task?.fileSnapshots[relPath];
+    if ((knownHash === undefined || knownHash === null) && name !== "write_file") {
+      return `EDIT_REQUIRES_READ: no existe un snapshot vigente de "${relPath}". Ejecuta read_file antes de ${name}.`;
+    }
+    return null;
   }
 
   private async markToolResult(
@@ -332,6 +470,72 @@ export class Agent {
       }
     } else if (READ_ONLY_TOOLS.has(name)) {
       this.task.lastAction = `inspect:${name}`;
+    }
+    if (name === "run_command") {
+      const stale = await this.reconcileTrackedSnapshots("run_command");
+      const match = result.match(/(?:^|\n)exit code:\s*(-?\d+)/i);
+      const exitCode = match ? Number(match[1]) : null;
+      const failed = exitCode !== null ? exitCode !== 0 : /^Error ejecutando el comando|^BLOQUEADO:/i.test(result);
+      const commandText = typeof args.command === "string" ? args.command : "";
+      const isComposeCommand = /\b(?:docker|podman)\s+compose\b/i.test(commandText);
+      const isComposeConfigCheck = /\b(?:docker|podman)\s+compose\s+config\b/i.test(commandText);
+      if (isComposeConfigCheck) {
+        if (failed) {
+          this.infrastructureFailure = {
+            command: commandText,
+            message: truncate(result, 1800),
+            kind: "compose",
+            configEvidence: /(?:yaml|mapping|duplicate|parse|syntax|invalid.*compose|compose.*invalid)/i.test(result)
+              ? "config-invalid"
+              : "runtime-failure",
+          };
+        } else {
+          this.infrastructureFailure = null;
+        }
+      } else if (failed && isComposeCommand) {
+        this.infrastructureFailure = {
+          command: commandText,
+          message: truncate(result, 1800),
+          kind: "compose",
+          configEvidence: "unknown",
+        };
+      } else if (failed) {
+        this.infrastructureFailure = {
+          command: commandText,
+          message: truncate(result, 1800),
+          kind: "command",
+          configEvidence: "unknown",
+        };
+      }
+      this.task.lastAction = failed
+        ? `command:failed:${exitCode ?? "unknown"}`
+        : stale.length > 0
+          ? `command:stale:${stale.join(",")}`
+          : "command:run_command";
+      if (stale.length > 0) {
+        this.task.phase = "inspect";
+        this.appendControl(
+          `run_command cambió archivos que el agente había leído: ${stale.join(", ")}. Los snapshots quedaron invalidados.\n` +
+            "No uses sed/perl/python/node para volver a editar esos archivos. Primero vuelve a leerlos con read_file y después usa una tool de mutación controlada."
+        );
+      }
+      if (failed) {
+        this.task.counters.failures++;
+        this.task.lastError = `Comando fallido (exit ${exitCode ?? "desconocido"}): ${truncate(result, 1400)}`;
+        this.task.phase = "repair";
+        this.appendControl(
+          [
+            "El último run_command FALLÓ. No lo presentes como completado.",
+            "Analiza stderr/exit code y sigue actuando en BUILD.",
+            "No le digas al usuario que ejecute el comando por su cuenta: intenta corregirlo tú dentro del workspace y vuelve a ejecutar la verificación.",
+            "Solo termina si consigues un resultado verificablemente correcto o existe un bloqueo externo real.",
+          ].join("\n")
+        );
+      } else {
+        // Un comando exitoso resuelve una parte de la tarea; no conviertas
+        // automáticamente el turno en una afirmación de éxito global.
+        this.task.lastError = undefined;
+      }
     }
     if (MUTATION_TOOLS.has(name)) {
       this.task.counters.edits++;
@@ -412,31 +616,47 @@ export class Agent {
 
   private shouldReturnText(content: string): boolean {
     if (!this.task || this.mode === "plan") return true;
+    // Un error de tool, un comando fallido o una verificación fallida nunca
+    // puede convertirse en un mensaje final solo porque el modelo escribió una
+    // explicación convincente. Primero debe intentar recuperarse o demostrar
+    // que el bloqueo es externo y no solucionable desde el workspace.
+    if (this.task.lastError || this.task.phase === "repair" || this.task.phase === "failed") {
+      return false;
+    }
     if (!this.task.requiresEdit) return true;
     if (this.task.phase === "complete") return true;
-    if (
-      MUTATION_TOOLS.size > 0 &&
-      this.task.counters.edits === 0 &&
-      !/tool call|herramienta/i.test(content)
-    )
+    if (MUTATION_TOOLS.size > 0 && this.task.counters.edits === 0 && !/tool call|herramienta/i.test(content))
       return false;
     return false;
   }
 
   async run(userInput: string): Promise<string> {
     if (this.messages.length === 0) this.init();
-    this.task = createTaskState(userInput);
+    const continuingPlan = this.mode === "build" && this.pendingPlan && this.isBuildConfirmation(userInput);
+    const effectiveObjective = continuingPlan ? this.pendingPlan!.objective : userInput;
+    this.task = createTaskState(effectiveObjective);
+    if (continuingPlan) {
+      this.task.plannedContext = this.pendingPlan!;
+      this.task.objective = this.pendingPlan!.objective;
+      this.task.requiresEdit = true;
+    }
     await this.persistence.init(this.task.id);
     await this.persistence.saveState(this.task);
     await this.persistence.saveMetadata(this.task.id, {
-      objective: userInput,
+      objective: effectiveObjective,
+      continuedFromPlan: Boolean(continuingPlan),
       workspaceDir: this.workspaceDir,
       mode: this.mode,
       createdAt: new Date().toISOString(),
     });
-    await this.persistence.appendEvent("TASK_CREATED", this.task.id, { objective: userInput });
+    await this.persistence.appendEvent("TASK_CREATED", this.task.id, { objective: effectiveObjective, continuedFromPlan: Boolean(continuingPlan) });
     if (this.mode === "plan") this.task.requiresEdit = false;
-    this.messages.push({ role: "user", content: userInput });
+    this.messages.push({
+      role: "user",
+      content: continuingPlan
+        ? `Aprobación del plan anterior: ${userInput.trim()}\n\nPLAN A EJECUTAR:\n${this.pendingPlan!.summary.slice(0, 12000)}`
+        : userInput,
+    });
     appendTranscript(this.workspaceDir, { role: "user", content: userInput, taskId: this.task.id });
 
     const allowedSchemas =
@@ -468,7 +688,21 @@ export class Agent {
         });
         finalContent = content;
 
-        if (this.shouldReturnText(content)) return content;
+        if (this.mode === "plan") {
+          this.pendingPlan = {
+            objective: this.task.objective,
+            summary: content.slice(0, 16000),
+            createdAt: new Date().toISOString(),
+          };
+          this.task.plannedContext = this.pendingPlan;
+          await this.persistence.saveState(this.task);
+          return content;
+        }
+
+        if (this.shouldReturnText(content)) {
+          if (this.mode === "build" && this.pendingPlan) this.pendingPlan = null;
+          return content;
+        }
         this.appendControl(
           [
             "La tarea sigue incompleta.",
@@ -533,6 +767,15 @@ export class Agent {
           }
         }
         if (!blockedByBudget) {
+          const mutationGuard = await this.ensureMutationPreconditions(name, args);
+          if (mutationGuard) {
+            result = mutationGuard;
+            this.task.lastError = mutationGuard;
+            this.task.phase = "inspect";
+            blockedByBudget = true;
+          }
+        }
+        if (!blockedByBudget) {
           await this.attachEditIntent(name, args);
           this.onEvent({ type: "tool_call", name, args: JSON.stringify(args) });
           this.toolLog.debug({ tool: name, args }, "tool_call");
@@ -541,6 +784,7 @@ export class Agent {
             throw new Error(`Tool ${name} no permitida en PLAN.`);
           result = await tool.execute(args, {
             workspaceDir: this.workspaceDir,
+            taskObjective: this.task.objective,
             mode: this.mode,
             logger: this.toolLog,
             pauseInput: this.ioControls.pauseInput,
@@ -550,7 +794,21 @@ export class Agent {
           });
         }
       } catch (err) {
-        result = `Error ejecutando ${name}: ${(err as Error).message}`;
+        if (err instanceof EditConflictError) {
+          this.task.lastError = err.message;
+          this.task.counters.failures++;
+          this.task.phase = "inspect";
+          if (this.task.editIntent?.path === err.relativePath) this.task.editIntent = undefined;
+          this.task.fileSnapshots[err.relativePath] = null;
+          await this.persistence.appendEvent("EDIT_CONFLICT_RECOVERED", this.task.id, {
+            path: err.relativePath,
+            expectedHash: err.expectedHash,
+            actualHash: err.actualHash,
+          });
+          result = `EDIT_CONFLICT: ${err.message}\nRecovery automático: snapshot invalidado. Vuelve a leer "${err.relativePath}" antes de otra mutación.`;
+        } else {
+          result = `Error ejecutando ${name}: ${(err as Error).message}`;
+        }
       }
 
       const safeResult = truncate(result, APP_CONSTANTS.MAX_TOOL_RESULT_CHARS);
@@ -572,9 +830,38 @@ export class Agent {
       await this.persistence.saveState(this.task);
       await this.persistence.appendEvent("TOOL_COMPLETED", this.task.id, { name, callId: call.id });
 
+      if (name === "run_command" && typeof args.command === "string" && /\b(?:docker|podman)\s+compose\s+config\b/i.test(args.command)) {
+        if (/(?:^|\n)exit code:\s*0\b/i.test(safeResult)) {
+          this.infrastructureFailure = null;
+        } else if (this.infrastructureFailure?.kind === "compose") {
+          this.infrastructureFailure.configEvidence = /(?:yaml|mapping|duplicate|parse|syntax|invalid.*compose|compose.*invalid)/i.test(safeResult)
+            ? "config-invalid"
+            : "runtime-failure";
+        }
+      }
+
+      if (/^(EDIT_STALE:|EDIT_CONFLICT:|EDIT_REQUIRES_READ:|INFRASTRUCTURE_GUARD:)/.test(safeResult)) {
+        this.appendControl(
+          `${safeResult}\nSigue la evidencia requerida por el runtime; no fuerces una reescritura destructiva.`
+        );
+      }
+
+      if (name === "apply_patch" && /falta \"diff\"|no aplica limpio|error/i.test(safeResult)) {
+        this.appendControl(
+          "El último apply_patch no fue válido. No repitas el mismo parche ni cambies a write_file por comodidad. Vuelve a leer la zona relevante y usa edit_file con un old_string pequeño y único, o construye un unified diff correcto con contexto suficiente."
+        );
+      }
+
+      if (name === "write_file" && /sobrescrito/i.test(safeResult) && this.task.targetFiles.includes(String(args.path ?? ""))) {
+        this.appendControl(
+          "Se sobrescribió un archivo existente. En los siguientes cambios evita reescrituras completas salvo que sean necesarias; prefiere edit_file/apply_patch para minimizar regresiones."
+        );
+      }
+
       if (MUTATION_TOOLS.has(name)) {
         const changed = /changed=true/i.test(safeResult);
         if (changed) {
+          this.task.lastError = undefined;
           const verification = await this.autoVerify();
           const control =
             this.task.phase === "complete"
@@ -611,8 +898,9 @@ export class Agent {
         ? `\n\n${errorText}`
         : "";
     return (
-      finalContent ||
-      `No se completó la tarea dentro de ${MAX_TOOL_ITERATIONS} iteraciones.${suffix}`
+      finalContent && !this.task?.lastError && this.task?.phase === "complete"
+        ? finalContent
+        : `No se pudo completar la tarea de forma verificada dentro de ${MAX_TOOL_ITERATIONS} iteraciones.${suffix || "\n\nNo se hizo una afirmación de éxito porque falta una verificación concluyente."}`
     );
   }
 
