@@ -1,6 +1,6 @@
 {
   "name": "dscode",
-  "version": "3.5.1",
+  "version": "3.5.2",
   "private": true,
   "description": "Agente de código en terminal (tipo OpenCode/Claude Code) con motor DeepSeek chat web vía Playwright. Modos Plan/Build, contexto de proyecto vía AGENTS.md.",
   "type": "module",

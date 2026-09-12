@@ -1,20 +1,38 @@
-import { color, truncateLine } from "./theme.js";
+import { color, displayWidth, terminalWidth, truncateLine, wrapText } from "./theme.js";
+
+function printWrapped(prefix: string, text: string, options?: { continuationPrefix?: string }): void {
+  const continuationPrefix = options?.continuationPrefix ?? prefix.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, " ");
+  const firstPrefixWidth = Math.max(1, displayWidth(prefix) + 1);
+  const continuationPrefixWidth = Math.max(1, displayWidth(continuationPrefix) + 1);
+  const width = terminalWidth();
+  const first = wrapText(text, Math.max(1, width - firstPrefixWidth));
+
+  if (first.length === 0) {
+    console.log(prefix);
+    return;
+  }
+
+  console.log(`${prefix} ${first[0]}`);
+  for (const line of first.slice(1)) {
+    console.log(`${continuationPrefix} ${wrapText(line, Math.max(1, width - continuationPrefixWidth))[0] ?? ""}`);
+  }
+}
 
 export function printUserBubble(text: string): void {
-  const lines = String(text ?? "").split("\n");
   console.log("");
+  const lines = String(text ?? "").split("\n");
   lines.forEach((line, index) => {
     const prefix = index === 0 ? color("› Tú", "blue") : color("  │", "blue");
-    console.log(`${prefix} ${line}`);
+    printWrapped(prefix, line, { continuationPrefix: color("  │", "blue") });
   });
 }
 
 export function printAgentBubble(text: string): void {
-  const lines = String(text ?? "").split("\n");
   console.log("");
+  const lines = String(text ?? "").split("\n");
   lines.forEach((line, index) => {
     const prefix = index === 0 ? color("◆ dscode", "magenta") : color("│", "magenta");
-    console.log(`${prefix} ${line}`);
+    printWrapped(prefix, line, { continuationPrefix: color("│", "magenta") });
   });
   console.log("");
 }
@@ -27,7 +45,23 @@ export function printToolCall(name: string, args = ""): void {
       : args
         ? ` ${color(truncateLine(args, 72), "gray")}`
         : "";
-  process.stdout.write(`${color("  ·", "yellow")} ${color(name, "white")}${suffix}\n`);
+  const line = `${color("  ·", "yellow")} ${color(name, "white")}${suffix}`;
+  const max = Math.max(20, terminalWidth());
+  if (line.replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "").length <= max) {
+    process.stdout.write(`${line}\n`);
+  } else {
+    const plainPrefix = `  · ${name}`;
+    const detailWidth = Math.max(12, max - plainPrefix.length - 1);
+    process.stdout.write(`${color("  ·", "yellow")} ${color(name, "white")}`);
+    if (details || args) {
+      const value = details || truncateLine(args, 72);
+      for (const part of wrapText(value, detailWidth)) {
+        process.stdout.write(` ${color(part, "gray")}\n`);
+      }
+    } else {
+      process.stdout.write("\n");
+    }
+  }
 }
 
 export function printToolResult(name: string, preview: string): void {
@@ -58,7 +92,12 @@ export function printStatusLine(input: {
 }
 
 export function printErrorBubble(text: string): void {
-  console.log(`${color("✖", "red")} ${color(truncateLine(text, 140), "red")}`);
+  const width = terminalWidth();
+  const prefix = `${color("✖", "red")} `;
+  const prefixWidth = 2;
+  for (const line of wrapText(text, Math.max(1, width - prefixWidth))) {
+    console.log(`${prefix}${color(line, "red")}`);
+  }
 }
 
 export function printCommandHelp(): void {

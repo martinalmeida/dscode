@@ -1,6 +1,6 @@
 import readline from "node:readline";
 import { printCommandHelp, printStatusLine, printUserBubble } from "./bubble.js";
-import { color } from "./theme.js";
+import { color, displayWidth, terminalWidth, wrapText } from "./theme.js";
 
 const COLORS = {
   reset: "\x1b[0m",
@@ -29,6 +29,7 @@ export function startPromptLoop(opts: {
   let busy = false;
   let history: string[] = [];
   let historyIndex = -1;
+  let renderedPromptLines = 0;
 
   readline.emitKeypressEvents(process.stdin);
   if (process.stdin.isTTY) {
@@ -43,8 +44,34 @@ export function startPromptLoop(opts: {
     return `${colorCode}${COLORS.bold}${label}${COLORS.reset} ${COLORS.dim}${opts.projectName}${COLORS.reset} ${color("›", "gray")} `;
   }
 
+  function clearRenderedPrompt(): void {
+    if (renderedPromptLines <= 0) return;
+
+    // The old prompt may have occupied several terminal rows. Clear all of
+    // them from bottom to top; clearing only the current row causes repeated
+    // prompt prefixes when a long input wraps.
+    process.stdout.write("\r\x1b[2K");
+    for (let index = 1; index < renderedPromptLines; index += 1) {
+      process.stdout.write("\x1b[1A\r\x1b[2K");
+    }
+    renderedPromptLines = 0;
+  }
+
   function redraw(): void {
-    process.stdout.write(`\r\x1b[K${promptLabel()}${buffer}`);
+    clearRenderedPrompt();
+
+    const columns = terminalWidth();
+    const label = promptLabel();
+    const labelWidth = displayWidth(label);
+    const contentWidth = Math.max(1, columns - labelWidth);
+    const bufferLines = wrapText(buffer, contentWidth);
+    const lines = bufferLines.length > 0 ? bufferLines : [""];
+
+    process.stdout.write(`${label}${lines[0] ?? ""}`);
+    for (const line of lines.slice(1)) {
+      process.stdout.write(`\n${" ".repeat(labelWidth)}${line}`);
+    }
+    renderedPromptLines = lines.length;
   }
 
   async function executeLine(line: string): Promise<void> {
@@ -157,6 +184,7 @@ export function startPromptLoop(opts: {
     if (key.name === "return") {
       const line = buffer;
       buffer = "";
+      clearRenderedPrompt();
       process.stdout.write("\n");
       await executeLine(line);
       return;
