@@ -4,13 +4,13 @@ import { color } from "./theme.js";
 
 /** Logo de dscode: D con el hueco interior en forma de corazon (ancho compensado para la terminal). */
 const DSCODE_MARK = [
-  "████████████",
-  "█████  ██  ███",
-  "███          ██",
+  "█████████████",
+  "█████  ██  ████",
   "███          ███",
-  "█████      ████",
-  "███████  █████",
-  "████████████",
+  "███          ███",
+  "█████      █████",
+  "███████  ██████",
+  "█████████████",
 ];
 
 // Ancho real del emblema (evita desalinear la columna de info si el arte cambia).
