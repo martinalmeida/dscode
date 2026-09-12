@@ -8,6 +8,13 @@ import { appendTranscript } from "../../infrastructure/transcript/transcript.js"
 import { verifyWorkspace } from "../../domain/verification/verifier.js";
 import { createTaskState, buildTaskAnchor, type TaskState } from "./taskState.js";
 import type { AgentMode } from "./modes.js";
+import { TaskPersistence, type PersistedTurn } from "../../domain/task/taskPersistence.js";
+import {
+  buildRecoveryPack,
+  recoveryInfo,
+  type RecoveryDecision,
+} from "../../domain/recovery/recoveryManager.js";
+import { createHash } from "node:crypto";
 
 const _log = createLogger("app:agent");
 
@@ -17,6 +24,7 @@ type ChatResponse = { choices?: Array<{ message?: ChatMessage }> };
 type ModelClient = {
   chat: { completions: { create: (args: unknown) => Promise<ChatResponse> } };
   close?: () => Promise<void>;
+  recoverNewChat?: () => Promise<void>;
 };
 
 interface AgentOpts {
@@ -24,7 +32,19 @@ interface AgentOpts {
   workspaceDir: string;
   systemPromptContext: string;
   mode?: AgentMode;
-  onEvent?: (e: { type: string; name: string; args?: string; result?: string }) => void;
+  onEvent?: (e: {
+    type: string;
+    name: string;
+    args?: string;
+    result?: string;
+    message?: string;
+    code?: string;
+  }) => void;
+  onRecoveryDecision?: (info: {
+    code: string;
+    message: string;
+    options: RecoveryDecision[];
+  }) => Promise<RecoveryDecision>;
 }
 
 const READ_ONLY_TOOLS = new Set([
@@ -46,10 +66,20 @@ export class Agent {
   private workspaceDir: string;
   private systemPromptContext: string;
   private mode: AgentMode;
-  private onEvent: (e: { type: string; name: string; args?: string; result?: string }) => void;
+  private onEvent: (e: {
+    type: string;
+    name: string;
+    args?: string;
+    result?: string;
+    message?: string;
+    code?: string;
+  }) => void;
   private messages: Array<Record<string, unknown>> = [];
   private toolLog: ReturnType<typeof createLogger>;
   private task: TaskState | null = null;
+  private persistence: TaskPersistence;
+  private onRecoveryDecision?: AgentOpts["onRecoveryDecision"];
+  private turnCounter = 0;
   private ioControls: {
     pauseInput?: () => void;
     resumeInput?: () => void;
@@ -64,6 +94,8 @@ export class Agent {
     this.mode = opts.mode ?? "build";
     this.onEvent = opts.onEvent || (() => {});
     this.toolLog = createLogger("app:agent:tools");
+    this.persistence = new TaskPersistence(this.workspaceDir);
+    this.onRecoveryDecision = opts.onRecoveryDecision;
   }
 
   setMode(mode: AgentMode): void {
@@ -103,7 +135,34 @@ export class Agent {
   }
 
   private async callModel(allowedSchemas: unknown[]): Promise<ChatMessage> {
-    for (let attempt = 0; attempt < 3; attempt++) {
+    const turnId = `turn_${Date.now()}_${++this.turnCounter}`;
+    const serialized = JSON.stringify({ messages: this.messages, tools: allowedSchemas });
+    const requestHash = createHash("sha256").update(serialized).digest("hex");
+    const persisted: PersistedTurn = {
+      turnId,
+      taskId: this.task?.id ?? "unknown",
+      request: serialized,
+      requestHash,
+      status: "created",
+      attempts: [],
+    };
+    await this.persistence.saveTurn(persisted);
+    await this.persistence.appendEvent("TURN_CREATED", this.task?.id ?? "unknown", {
+      turnId,
+      requestHash,
+    });
+
+    const maxAttempts = 3;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const attemptId = `${turnId}_attempt_${attempt}`;
+      persisted.status = "sending";
+      persisted.attempts.push({ id: attemptId, status: "sending", requestHash });
+      await this.persistence.saveTurn(persisted);
+      await this.persistence.appendEvent("TURN_SEND_STARTED", persisted.taskId, {
+        turnId,
+        attemptId,
+        requestHash,
+      });
       try {
         const response = await this.client.chat.completions.create({
           model: "deepseek-chat",
@@ -112,15 +171,116 @@ export class Agent {
         } as never);
         const message = response?.choices?.[0]?.message;
         if (!message) throw new Error("Respuesta inesperada del modelo: falta choices[0].message.");
+        persisted.status = "completed";
+        persisted.response = JSON.stringify(message);
+        const current = persisted.attempts[persisted.attempts.length - 1];
+        if (current) current.status = "completed";
+        await this.persistence.saveTurn(persisted);
+        await this.persistence.appendEvent("TURN_RESPONSE_COMPLETED", persisted.taskId, {
+          turnId,
+          attemptId,
+        });
         return message;
       } catch (err) {
-        const msg = (err as Error).message || "";
-        const retryable =
-          /429|5\d\d|timeout|ECONNRESET|ETIMEDOUT|fetch failed|Target closed|Page closed/i.test(
-            msg
-          );
-        if (!retryable || attempt === 2) throw err;
-        await new Promise((r) => setTimeout(r, 500 * 2 ** attempt));
+        const info = recoveryInfo(err);
+        const current = persisted.attempts[persisted.attempts.length - 1];
+        if (current) {
+          current.status = "failed";
+          current.error = info.message;
+        }
+        persisted.status = "failed";
+        persisted.error = info.message;
+        await this.persistence.saveTurn(persisted);
+        await this.persistence.appendEvent("TURN_FAILED", persisted.taskId, {
+          turnId,
+          attemptId,
+          code: info.code,
+          message: info.message,
+        });
+        this.onEvent({
+          type: "deepseek_error",
+          name: info.code,
+          code: info.code,
+          message: info.message,
+        });
+
+        if (info.code === "CONTEXT_EXHAUSTED") {
+          await this.persistence.appendEvent("CHAT_CONTEXT_EXHAUSTED", persisted.taskId, {
+            turnId,
+          });
+          const decision =
+            (await this.onRecoveryDecision?.({
+              code: info.code,
+              message: info.message,
+              options: ["new_chat", "compact_new_chat", "pause", "cancel"],
+            })) ?? "new_chat";
+          if (decision === "pause" || decision === "cancel")
+            throw new Error(`[DSCODE_${decision.toUpperCase()}] ${info.message}`);
+          if (!this.client.recoverNewChat) throw err;
+          if (this.task) {
+            const pack = buildRecoveryPack(this.task, this.workspaceDir, serialized.slice(-12000));
+            const system = this.messages.find((m) => m.role === "system");
+            const user = this.messages.filter((m) => m.role === "user").slice(-1)[0];
+            this.messages = [
+              system ?? {
+                role: "system",
+                content: buildSystemPrompt(this.workspaceDir, this.systemPromptContext),
+              },
+              { role: "user", content: pack },
+              ...(user ? [user] : []),
+            ];
+          }
+          await this.client.recoverNewChat();
+          await this.persistence.appendEvent("CHAT_ROTATED", persisted.taskId, {
+            turnId,
+            reason: "CONTEXT_EXHAUSTED",
+            decision,
+          });
+          attempt = 0;
+          continue;
+        }
+
+        if (info.retryable && attempt < maxAttempts) {
+          const delay = 750 * 2 ** (attempt - 1);
+          this.onEvent({
+            type: "deepseek_recovery",
+            name: "retry",
+            message: `Reintentando la misma solicitud. Intento ${attempt + 1}/${maxAttempts}.`,
+          });
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        const decision = await this.onRecoveryDecision?.({
+          code: info.code,
+          message: info.message,
+          options:
+            info.code === "AUTH_REQUIRED" || info.code === "CLOUDFLARE_CHALLENGE"
+              ? ["retry", "pause", "cancel"]
+              : ["retry", "new_chat", "pause", "cancel"],
+        });
+        if (decision === "retry") {
+          attempt = 0;
+          continue;
+        }
+        if (decision === "new_chat" || decision === "compact_new_chat") {
+          if (!this.client.recoverNewChat) throw err;
+          await this.client.recoverNewChat();
+          if (this.task) {
+            const pack = buildRecoveryPack(this.task, this.workspaceDir, serialized.slice(-12000));
+            const system = this.messages.find((m) => m.role === "system");
+            this.messages = [
+              system ?? {
+                role: "system",
+                content: buildSystemPrompt(this.workspaceDir, this.systemPromptContext),
+              },
+              { role: "user", content: pack },
+            ];
+          }
+          attempt = 0;
+          continue;
+        }
+        throw err;
       }
     }
     throw new Error("No se obtuvo respuesta del modelo.");
@@ -266,6 +426,15 @@ export class Agent {
   async run(userInput: string): Promise<string> {
     if (this.messages.length === 0) this.init();
     this.task = createTaskState(userInput);
+    await this.persistence.init(this.task.id);
+    await this.persistence.saveState(this.task);
+    await this.persistence.saveMetadata(this.task.id, {
+      objective: userInput,
+      workspaceDir: this.workspaceDir,
+      mode: this.mode,
+      createdAt: new Date().toISOString(),
+    });
+    await this.persistence.appendEvent("TASK_CREATED", this.task.id, { objective: userInput });
     if (this.mode === "plan") this.task.requiresEdit = false;
     this.messages.push({ role: "user", content: userInput });
     appendTranscript(this.workspaceDir, { role: "user", content: userInput, taskId: this.task.id });
@@ -278,6 +447,11 @@ export class Agent {
 
     for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
       this.task.counters.iterations = i + 1;
+      await this.persistence.saveState(this.task);
+      await this.persistence.appendEvent("TASK_CHECKPOINTED", this.task.id, {
+        phase: this.task.phase,
+        iteration: i + 1,
+      });
       this.compactHistoryIfNeeded();
       this.messages.push({ role: "user", content: buildTaskAnchor(this.task, this.workspaceDir) });
       const msg = await this.callModel(allowedSchemas);
@@ -395,6 +569,8 @@ export class Agent {
       }
       this.toolLog.debug({ tool: name, resultPreview: safeResult.slice(0, 500) }, "tool_result");
       this.messages.push({ role: "tool", tool_call_id: call.id, name, content: safeResult });
+      await this.persistence.saveState(this.task);
+      await this.persistence.appendEvent("TOOL_COMPLETED", this.task.id, { name, callId: call.id });
 
       if (MUTATION_TOOLS.has(name)) {
         const changed = /changed=true/i.test(safeResult);
@@ -413,6 +589,14 @@ export class Agent {
       }
     }
 
+    if (this.task) {
+      await this.persistence.saveState(this.task);
+      await this.persistence.appendEvent(
+        this.task.phase === "complete" ? "TASK_COMPLETED" : "TASK_CHECKPOINTED",
+        this.task.id,
+        { phase: this.task.phase }
+      );
+    }
     const statusText = this.task?.verification
       ? this.task.verification.passed
         ? "verificado"

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { chromium, type Browser, type BrowserContext, type Page, type Locator } from "playwright";
 import { SELECTORS } from "./selectors.js";
+import { DeepSeekDomAdapter } from "../deepseek/domAdapter.js";
 import { createLogger } from "../logger/logger.js";
 
 export interface SessionConfig {
@@ -50,28 +51,31 @@ async function isLoginPage(page: Page): Promise<boolean> {
 }
 
 export async function waitForChatReady(page: Page, timeoutMs = 12000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await isLoginPage(page)) {
-      throw authError(
-        "No hay una sesión activa de DeepSeek. Ejecuta 'dscode login' y vuelve a intentarlo."
-      );
-    }
-    const textarea = await resolveTextarea(page);
-    if (await textarea.isVisible().catch(() => false)) return;
-    await page.waitForTimeout(250);
+  const adapter = new DeepSeekDomAdapter(page);
+  try {
+    await adapter.waitUntilReady(timeoutMs);
+  } catch (error) {
+    const code = (error as { code?: string }).code;
+    if (code === "AUTH_REQUIRED") throw authError((error as Error).message);
+    throw error;
   }
-  if (await isLoginPage(page)) {
-    throw authError(
-      "La sesión de DeepSeek no está autenticada. Ejecuta 'dscode login' para guardar una sesión válida."
-    );
-  }
-  throw new Error(
-    `No se encontró el cuadro de mensaje de DeepSeek después de ${timeoutMs} ms. La interfaz pudo haber cambiado o la página no terminó de cargar.`
-  );
 }
 
 export async function createSession(config: SessionConfig): Promise<Session> {
+  return createSessionInternal(config, true);
+}
+
+/**
+ * Creates a visible diagnostic session without assuming that the DeepSeek UI
+ * still matches dscode's production selectors or that the stored auth state
+ * is valid. This is intentionally permissive so the DOM inspector can be
+ * used precisely when the normal adapter is broken.
+ */
+export async function createDiagnosticSession(config: SessionConfig): Promise<Session> {
+  return createSessionInternal({ ...config, headless: false }, false);
+}
+
+async function createSessionInternal(config: SessionConfig, verifyChat: boolean): Promise<Session> {
   const { chatUrl, headless, storageStatePath, chromiumExecutablePath } = config;
   if (chromiumExecutablePath && !fs.existsSync(chromiumExecutablePath)) {
     throw new Error(
@@ -80,33 +84,36 @@ export async function createSession(config: SessionConfig): Promise<Session> {
   }
   const launchOptions: { headless: boolean; executablePath?: string } = { headless };
   if (chromiumExecutablePath) launchOptions.executablePath = chromiumExecutablePath;
-  log.debug({ headless: launchOptions.headless }, "[chromium] Lanzando");
+  log.debug({ headless: launchOptions.headless, verifyChat }, "[chromium] Lanzando");
   const browser = await chromium.launch(launchOptions);
   const contextOptions: { storageState?: string; permissions?: string[] } = {};
   const hasStorageState = fs.existsSync(storageStatePath);
   if (hasStorageState) contextOptions.storageState = storageStatePath;
-  else log.warn({ storageStatePath }, "storageState no existe");
-  // Clipboard necesario para fallback de payloads grandes (24k) vía Ctrl+V
-  (contextOptions as { permissions?: string[] }).permissions = [
-    "clipboard-read",
-    "clipboard-write",
-  ];
+  else if (verifyChat) log.warn({ storageStatePath }, "storageState no existe");
+  contextOptions.permissions = ["clipboard-read", "clipboard-write"];
   const context = await browser.newContext(contextOptions as never);
   const page = await context.newPage();
-  await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
-  if (!hasStorageState) {
-    await browser.close();
-    throw authError(
-      `No existe ${storageStatePath}. Ejecuta 'dscode login' para iniciar sesión en DeepSeek y guardar una sesión válida.`
-    );
+  try {
+    await page.goto(chatUrl, { waitUntil: "domcontentloaded" });
+    if (verifyChat) {
+      if (!hasStorageState) {
+        await browser.close();
+        throw authError(
+          `No existe ${storageStatePath}. Ejecuta 'dscode login' para iniciar sesión en DeepSeek y guardar una sesión válida.`
+        );
+      }
+      if (await isLoginPage(page)) {
+        await browser.close();
+        throw authError(
+          `La sesión guardada de DeepSeek ya no es válida. Ejecuta 'dscode login' para renovarla.`
+        );
+      }
+    }
+    return { browser, context, page, historyLength: 0, config };
+  } catch (error) {
+    await browser.close().catch(() => undefined);
+    throw error;
   }
-  if (await isLoginPage(page)) {
-    await browser.close();
-    throw authError(
-      `La sesión guardada de DeepSeek ya no es válida. Ejecuta 'dscode login' para renovarla.`
-    );
-  }
-  return { browser, context, page, historyLength: 0, config };
 }
 
 export async function closeSession(session: Session | null | undefined): Promise<void> {
@@ -118,40 +125,26 @@ export async function closeSession(session: Session | null | undefined): Promise
 }
 
 async function checkForCloudflareChallenge(page: Page): Promise<void> {
-  const overlay = page.locator(SELECTORS.cloudflareChallenge);
-  const isVisible = await overlay.isVisible().catch((e) => {
-    log.debug({ err: e }, "cloudflare check failed");
-    return false;
-  });
-  if (isVisible)
-    throw new Error(
+  const adapter = new DeepSeekDomAdapter(page);
+  if (await adapter.isCloudflare()) {
+    const error = new Error(
       "Apareció el reto de Cloudflare (Turnstile) en DeepSeek. Si el navegador está visible (HEADLESS=false), resuélvelo manualmente y vuelve a intentar. Si está en headless, considera correr con HEADLESS=false."
-    );
+    ) as Error & { code?: string };
+    error.code = "CLOUDFLARE_CHALLENGE";
+    throw error;
+  }
 }
 
 async function resolveTextarea(page: Page): Promise<Locator> {
-  // Prioriza elemento visible con tamaño real (>10px) para evitar hidden textarea espejo (Lexical off-screen)
-  const candidates = [
-    'div[contenteditable="true"][role="textbox"]:not([aria-hidden="true"])',
-    'div[contenteditable="true"]:not([aria-hidden="true"])',
-    'textarea#chat-input:not([aria-hidden="true"])',
-    'textarea[placeholder*="Ask" i]:not([aria-hidden="true"])',
-    'textarea[placeholder*="Message" i]:not([aria-hidden="true"])',
-    'textarea[placeholder*="Mensaje" i]:not([aria-hidden="true"])',
-  ];
-  for (const sel of candidates) {
-    const loc = page.locator(sel);
-    const cnt = await loc.count().catch(() => 0);
-    for (let i = 0; i < cnt; i++) {
-      const el = loc.nth(i);
-      if (!(await el.isVisible().catch(() => false))) continue;
-      const box = await el.boundingBox().catch(() => null);
-      if (box && box.width > 10 && box.height > 10) return el;
-      // Si no hay box pero es visible, igual sirve (algunos contenteditable reportan null box en headless)
-      if (!box) return el;
-    }
+  const adapter = new DeepSeekDomAdapter(page);
+  const preferred = adapter.composerLocator();
+  const count = await preferred.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const el = preferred.nth(i);
+    if (!(await el.isVisible().catch(() => false))) continue;
+    const box = await el.boundingBox().catch(() => null);
+    if (!box || (box.width > 10 && box.height > 10)) return el;
   }
-  // Fallback: primer match del selector compuesto (mantiene compat)
   return page.locator(SELECTORS.textarea).first();
 }
 
@@ -392,7 +385,7 @@ export async function sendMessage(
   } catch (e) {
     if ((e as Error).message.includes("Sesión expirada")) throw e;
   }
-  const countBefore = await page.locator(SELECTORS.assistantMessage).count();
+  const countBefore = await new DeepSeekDomAdapter(page).assistantMessages().count();
   let initialLastText = "";
   if (countBefore > 0) {
     try {
@@ -404,7 +397,7 @@ export async function sendMessage(
       void _e;
     }
   }
-  const sendButton = page.locator(SELECTORS.sendButton).first();
+  const sendButton = new DeepSeekDomAdapter(page).sendButton();
   const hasSendButton = (await sendButton.count()) > 0;
   if (hasSendButton) {
     // SELECTORS.sendButton contiene :has-text que no es válido en document.querySelector — filtrar a CSS puro para waitForFunction
@@ -459,7 +452,7 @@ export async function sendMessage(
     initialLastText
   );
   await checkForCloudflareChallenge(page);
-  const messages = page.locator(SELECTORS.assistantMessage);
+  const messages = new DeepSeekDomAdapter(page).assistantMessages();
   const total = await messages.count();
   if (total === 0)
     throw new Error(
@@ -472,7 +465,7 @@ export async function sendMessage(
 export async function resumeReadResponse(session: Session): Promise<string> {
   const { page } = session;
   await checkForCloudflareChallenge(page);
-  const messages = page.locator(SELECTORS.assistantMessage);
+  const messages = new DeepSeekDomAdapter(page).assistantMessages();
   const total = await messages.count();
   if (total === 0)
     throw new Error("resumeReadResponse: no hay ningún mensaje de asistente que leer todavía.");
@@ -500,7 +493,7 @@ async function waitForResponseToFinish(
   responseTimeoutMs: number,
   initialLastText = ""
 ): Promise<void> {
-  const stopButton = page.locator(SELECTORS.stopGeneratingButton).first();
+  const stopButton = new DeepSeekDomAdapter(page).stopButton();
   try {
     await stopButton.waitFor({ state: "visible", timeout: 5000 });
     await stopButton.waitFor({ state: "hidden", timeout: responseTimeoutMs });
@@ -525,7 +518,7 @@ async function waitForResponseToFinish(
   }
   while (Date.now() - start < responseTimeoutMs) {
     await checkForCloudflareChallenge(page);
-    const messages = page.locator(SELECTORS.assistantMessage);
+    const messages = new DeepSeekDomAdapter(page).assistantMessages();
     const count = await messages.count();
     if (count !== lastCount) {
       log.debug({ countBefore, count, lastLength }, "assistantMessage count changed");
@@ -594,7 +587,7 @@ async function waitForResponseToFinish(
     }
     await page.waitForTimeout(800);
   }
-  const finalCount = await page.locator(SELECTORS.assistantMessage).count();
+  const finalCount = await new DeepSeekDomAdapter(page).assistantMessages().count();
   let fullLastText = "";
   try {
     if (finalCount > 0)
@@ -696,10 +689,14 @@ function isLenientEditFileComplete(inner: string): boolean {
 
 export async function startNewChat(session: Session): Promise<void> {
   const { page, config } = session;
-  const newChatButton = page.locator(SELECTORS.newChatButton).first();
-  if (await newChatButton.count()) {
+  const adapter = new DeepSeekDomAdapter(page);
+  const newChatButton = adapter.newChatButton();
+  if ((await newChatButton.count().catch(() => 0)) > 0) {
     await newChatButton.click();
-    await page.waitForTimeout(1000);
-  } else await page.goto(config.chatUrl, { waitUntil: "domcontentloaded" });
+    await page.waitForTimeout(800);
+  } else {
+    await page.goto(config.chatUrl, { waitUntil: "domcontentloaded" });
+  }
   session.historyLength = 0;
+  await adapter.waitUntilReady(12000);
 }

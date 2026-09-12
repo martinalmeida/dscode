@@ -18,6 +18,8 @@ import {
 } from "../ui/bubble.js";
 import { startPromptLoop } from "../ui/promptLoop.js";
 import { createLogger } from "../infrastructure/logger/logger.js";
+import { askRecoveryDecision } from "../ui/recoveryPrompt.js";
+import { runDeepSeekInspect } from "../infrastructure/deepseek/diagnostics/cli.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const AGENT_INSTALL_DIR = fs.realpathSync(path.resolve(path.dirname(__filename), "../.."));
@@ -40,6 +42,16 @@ async function main(): Promise<void> {
     await runLogin({ calibrate: true, agentInstallDir: AGENT_INSTALL_DIR });
     process.exit(0);
   }
+  if (subcommand === "deepseek" && process.argv[3] === "inspect") {
+    await runDeepSeekInspect({
+      agentInstallDir: AGENT_INSTALL_DIR,
+      record: process.argv.includes("--record"),
+      screenshots: !process.argv.includes("--no-screenshot"),
+      outputDir: readOptionalFlag("--out"),
+      diffFiles: readDiffFiles(),
+    });
+    process.exit(0);
+  }
   await runAgentSession();
 }
 
@@ -49,14 +61,20 @@ async function runAgentSession(): Promise<void> {
   const projectName = await detectProjectName(workspaceDir);
   const initialMode = process.argv.includes("--plan") ? ("plan" as const) : ("build" as const);
 
-  printBanner({ version: `v${PACKAGE_JSON.version}`, projectName });
-  const { systemPromptSection, loadedFiles, truncated } = await loadProjectContext(workspaceDir);
-  const ctxInfo = loadedFiles.length > 0 ? loadedFiles.join(", ") : "sin contexto";
+  printBanner({
+    version: `v${PACKAGE_JSON.version}`,
+    projectName,
+    workspaceDir,
+    account: process.env.DSCODE_ACCOUNT ?? "DeepSeek Web",
+    model: "DeepSeek Chat (Web · Playwright)",
+    mode: initialMode,
+  });
+  const { systemPromptSection, truncated } = await loadProjectContext(workspaceDir);
   const truncHint = truncated
     ? ` \x1b[33m[contexto truncado ${truncated.before}→${truncated.cap}]\x1b[0m`
     : "";
-  // Header compacto en 2 líneas — hint amarillo si hubo truncado (visible sin mirar stderr)
-  console.log(`\x1b[2m${workspaceDir} · ${ctxInfo}${truncHint}\x1b[0m`);
+  // La cabecera visual ya muestra workspace y AGENTS.md; solo dejamos un aviso operativo si hubo truncado.
+  if (truncHint) console.log(`  ${truncHint}\n`);
 
   let client: ReturnType<typeof createModelClient>;
   try {
@@ -73,8 +91,18 @@ async function runAgentSession(): Promise<void> {
     workspaceDir,
     systemPromptContext: systemPromptSection,
     mode: initialMode,
+    onRecoveryDecision: askRecoveryDecision,
     onEvent: (event) => {
-      if (event.type === "tool_call") {
+      if (event.type === "deepseek_error") {
+        activeSpinner?.pause();
+        console.log(`\n\x1b[33m⚠ DeepSeek: ${event.name}\x1b[0m`);
+        console.log(`Causa: ${event.message ?? "error desconocido"}`);
+        activeSpinner?.resume("Recuperando DeepSeek");
+      } else if (event.type === "deepseek_recovery") {
+        activeSpinner?.pause();
+        console.log(`\n\x1b[36m↻ ${event.message ?? "Recuperando DeepSeek..."}\x1b[0m`);
+        activeSpinner?.resume("Consultando DeepSeek");
+      } else if (event.type === "tool_call") {
         activeSpinner?.pause();
         printToolCall(event.name, event.args ?? "");
         activeSpinner?.resume(`Ejecutando ${event.name}`);
@@ -91,8 +119,6 @@ async function runAgentSession(): Promise<void> {
     },
   });
   agent.init();
-
-  console.log(`\x1b[2mTab cambia modo · /help comandos · Ctrl+C salir\x1b[0m\n`);
 
   let loop: ReturnType<typeof startPromptLoop> | null = null;
   const shutdown = async (): Promise<void> => {
@@ -153,6 +179,25 @@ async function runAgentSession(): Promise<void> {
       }
     },
   });
+}
+
+function readDiffFiles(): [string, string] | undefined {
+  const index = process.argv.indexOf("--diff");
+  if (index < 0) return undefined;
+  const before = process.argv[index + 1];
+  const after = process.argv[index + 2];
+  if (!before || !after || before.startsWith("--") || after.startsWith("--")) {
+    fatal(
+      "--diff requiere dos archivos HTML: dscode deepseek inspect --diff antes.html despues.html"
+    );
+  }
+  return [before, after];
+}
+
+function readOptionalFlag(flag: string): string | undefined {
+  const index = process.argv.indexOf(flag);
+  const value = index >= 0 ? process.argv[index + 1] : undefined;
+  return value && !value.startsWith("--") ? value : undefined;
 }
 
 function resolveWorkspaceDir(): string {

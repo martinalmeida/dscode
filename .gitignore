@@ -1,18 +1,7 @@
-# deps
 node_modules/
-
-# config local (con credenciales / sesión)
+dist/
 .env
 storage-state.json
-
-
-# build
-dist/
-build/
-
-# OS / editor
-.DS_Store
-Thumbs.db
+chrome-linux64/
 *.log
-.vscode/
-.idea/
+.DS_Store

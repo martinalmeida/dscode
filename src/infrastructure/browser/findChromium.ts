@@ -22,16 +22,32 @@ export function findChromium(opts: { agentInstallDir: string; explicitPath?: str
     );
   }
   const platform = os.platform();
-  const candidates = getCandidatePaths(platform);
-  for (const candidate of candidates)
-    if (fs.existsSync(candidate))
-      return { executablePath: candidate, source: "detección automática" };
+  const candidates = getCandidatePaths(platform, agentInstallDir);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return { executablePath: candidate, source: `detección automática: ${candidate}` };
+      } catch {
+        log.warn({ candidate }, "[chromium] candidato encontrado pero no es ejecutable");
+      }
+    }
+  }
   return { executablePath: undefined, source: "Chromium propio de Playwright" };
 }
 
-function getCandidatePaths(platform: string): string[] {
+function getCandidatePaths(platform: string, agentInstallDir: string): string[] {
+  const cwd = process.cwd();
+  const localBundled = [
+    path.resolve(cwd, "chrome-linux64", "chrome"),
+    path.resolve(cwd, "chrome-linux64", "chrome-linux64", "chrome"),
+    path.resolve(agentInstallDir, "chrome-linux64", "chrome"),
+    path.resolve(agentInstallDir, "chrome-linux64", "chrome-linux64", "chrome"),
+  ];
+
   if (platform === "linux")
     return [
+      ...localBundled,
       "/usr/bin/chromium",
       "/usr/bin/chromium-browser",
       "/usr/bin/google-chrome",
@@ -42,6 +58,7 @@ function getCandidatePaths(platform: string): string[] {
     ];
   if (platform === "darwin")
     return [
+      ...localBundled,
       "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
       "/Applications/Chromium.app/Contents/MacOS/Chromium",
       path.join(os.homedir(), "Applications/Google Chrome.app/Contents/MacOS/Google Chrome"),
@@ -51,10 +68,12 @@ function getCandidatePaths(platform: string): string[] {
     const pf86 = process.env["PROGRAMFILES(X86)"] || "C:\\Program Files (x86)";
     const lad = process.env["LOCALAPPDATA"] || "";
     return [
+      path.resolve(cwd, "chrome-linux64", "chrome.exe"),
+      path.resolve(agentInstallDir, "chrome-linux64", "chrome.exe"),
       path.join(pf, "Google\\Chrome\\Application\\chrome.exe"),
       path.join(pf86, "Google\\Chrome\\Application\\chrome.exe"),
       path.join(lad, "Google\\Chrome\\Application\\chrome.exe"),
-      path.join(pf, "Chromium\\Application\\chrome.exe"),
+      path.join(lad, "Chromium\\Application\\chrome.exe"),
     ];
   }
   return [];

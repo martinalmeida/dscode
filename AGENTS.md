@@ -1,100 +1,225 @@
-# AGENTS.md — dscode
+# AGENTS.md — dscode 3.5.1
 
-Agente de código en terminal (estilo OpenCode/Claude Code) con motor DeepSeek chat web vía Playwright (scraping de chat.deepseek.com, único motor). Se instala una vez y se corre desde cualquier proyecto (`cwd` = workspace).
+## Propósito
 
-## Comandos
+`dscode` es un agente de código para terminal que trabaja sobre el **workspace actual** y utiliza DeepSeek Web mediante Playwright. Está pensado para instalarse una vez y ejecutarse desde cualquier proyecto con `npm link`.
+
+La versión 3.5.1 mantiene el núcleo de confiabilidad de 3.0/3.1, la experiencia CLI de 3.2 y añade el núcleo de confiabilidad/Recovery de 3.3 más el DeepSeek DOM Adapter/Inspector de 3.4/3.5, mientras deja la documentación alineada con el código real.
+
+## Instalación y uso
 
 ```bash
-npm install          # instalar deps
-npm link             # expone bin `dscode` global (symlink)
-npm start            # = node dist/app/cli.js (corre agente en cwd)
-npm run login        # = dscode login — login DeepSeek web (abre Chromium visible)
-npm run calibrate    # = dscode calibrate
-npm run build        # compila TS → dist/
-npm run dev          # build + dscode en un paso
-dscode               # corre en proyecto actual (Build por defecto)
-dscode --plan        # inicia en modo solo-lectura
-dscode --dir <ruta>  # fuerza workspace distinto a cwd
-npm run lint         # revisa reglas con ESLint (typescript-eslint)
-npm run typecheck    # chequeo de tipos con tsc --noEmit (strict true)
-npm run format       # formatea código con Prettier
+npm install
+npm run build
+npm link
+
+dscode login
+cd /ruta/a/tu-proyecto
+dscode
 ```
 
-Build con `tsc` (`tsconfig.build.json` → `dist/`), linting ESLint + typescript-eslint + Prettier, tipos estrictos (`strict: true`).
+Opciones de arranque:
 
-## Arquitectura
-
-Estructura profesional por capas (`src/` → `dist/`). Todo es TypeScript estricto, ESM (`NodeNext`).
-
+```bash
+dscode --plan          # iniciar en modo solo lectura
+dscode --dir /ruta/proyecto
 ```
+
+> `dscode` no debe ejecutarse sobre su propia carpeta de instalación. El CLI bloquea ese caso para evitar que el agente se modifique a sí mismo.
+
+## Desarrollo
+
+```bash
+npm run build          # TypeScript → dist/
+npm run dev            # build + ejecución
+npm test               # build + tests de regresión
+npm run lint
+npm run lint:fix
+npm run typecheck
+npm run format
+npm run format:check
+npm run login
+npm run calibrate
+```
+
+El binario publicado por `npm link` apunta a `dist/app/cli.js`. Después de cambiar el código fuente basta con `npm run build`; no es necesario repetir `npm link`.
+
+### Diagnóstico de DeepSeek Web
+
+Para estudiar cambios reales de la interfaz sin depender de los selectores de producción:
+
+```bash
+dscode deepseek inspect
+dscode deepseek inspect --record
+dscode deepseek inspect --record --out ./deepseek-dom
+dscode deepseek inspect --diff antes.html despues.html
+```
+
+El inspector debe permanecer como herramienta de mantenimiento. Si DeepSeek cambia el DOM, primero se capturan estados reales con el inspector y después se actualizan el adaptador y sus fixtures. Las capturas pueden contener contenido visible de conversaciones; deben tratarse como datos potencialmente sensibles.
+
+## Arquitectura real
+
+```text
 src/
-  app/
-    cli.ts          — entrypoint / bin (AGENT_INSTALL_DIR, guard assertWorkspaceIsSafe, dotenv, banner, provider, Agent, SIGINT/SIGTERM)
-    agent/
-      agent.ts      — loop principal (MAX_TOOL_ITERATIONS=15, retry/backoff 3×, loop-detection 3×, Promise.all paralelo, truncado 8000, transcript)
-      modes.ts      — AgentMode, MAX_TOOL_ITERATIONS, READ_ONLY_TOOLS
-      prompt.ts     — buildSystemPrompt (scope recursivo ilimitado, IGNORED_DIRS, batch paralelo, autónomo)
-    context/
-      loader.ts     — carga AGENTS.md raíz+anidados ilimitado + .agent/agents/.deepseek/*.md
-  domain/
-    tools/
-      types.ts      — ToolDefinition, ToolContext, ToolSchema
-      registry.ts   — ToolRegistry (get/getAll/getSchemas/getSchemasForMode, inmutable)
-      index.ts      — instancia central `toolRegistry` (11 tools) + `toolSchemas`
-      definitions/  — readFile, readMany, listDirectory, runCommand (workdir), searchFiles, deleteFile, editFile, glob (fast-glob), patch (multi-hunk), diagnostics (tsc+eslint) (1 carpeta/tool)
-  infrastructure/
-    logger/
-      logger.ts     — pino (pretty en dev, JSON en prod, redact, LOG_LEVEL/LOG_PRETTY)
-    browser/
-      findChromium.ts / session.ts / selectors.ts / login.ts
-    providers/
-      index.ts      — factory createModelClient (solo web, Playwright)
-      webClient.ts  — DeepSeekWebClient (Playwright, multi TOOL_CALL, _sessionPromise reset + healthcheck)
-      toolProtocol.ts — adaptador tool-calling + parseModelResponseMulti
-    transcript/
-      transcript.ts — appendTranscript/loadLastTranscript (~/.cache/dscode/transcripts/<hash>/YYYY-MM-DD.jsonl)
-  shared/
-    safePath.ts     — resolveSafe (=== base || startsWith(base+sep) + realpath symlink-aware)
-    constants.ts    — APP_CONSTANTS (IGNORED_DIRS 10: +vendor/__pycache__/.venv/.bundle), READ_ONLY_TOOLS, BLOCKED_PATTERNS, CONFIRM_PATTERNS
-    env.ts          — getEnvString/getEnvBool/getEnvNumber (strip \r/quotes, sí/si)
-    errors.ts       — DscodeError, WorkspaceError, ToolError, ConfigError
-  ui/
-    banner.ts / bubble.ts / confirm.ts / spinner.ts / promptLoop.ts
-  config/
-    env.schema.ts   — zod schema para .env
-    app.config.ts   — loadConfig() tipado
+├── app/
+│   ├── cli.ts
+│   ├── agent/
+│   │   ├── agent.ts
+│   │   ├── modes.ts
+│   │   ├── prompt.ts
+│   │   └── taskState.ts
+│   └── context/
+│       └── loader.ts
+├── domain/
+│   ├── execution/
+│   │   ├── editTransaction.ts
+│   │   └── fileSnapshot.ts
+│   ├── verification/
+│   │   ├── projectDetector.ts
+│   │   └── verifier.ts
+│   ├── tools/
+│   │   ├── registry.ts
+│   │   ├── index.ts
+│   │   └── definitions/
+│   ├── task/
+│   │   └── taskPersistence.ts
+│   ├── recovery/
+│   │   └── recoveryManager.ts
+│   └── llm/
+│       └── llmError.ts
+├── infrastructure/
+│   ├── browser/
+│   ├── deepseek/
+│   │   ├── domAdapter.ts
+│   │   └── diagnostics/
+│   ├── logger/
+│   ├── providers/
+│   └── transcript/
+├── shared/
+│   ├── constants.ts
+│   ├── env.ts
+│   ├── errors.ts
+│   └── safePath.ts
+└── ui/
+    ├── banner.ts
+    ├── bubble.ts
+    ├── confirm.ts
+    ├── promptLoop.ts
+    ├── recoveryPrompt.ts
+    ├── spinner.ts
+    └── theme.ts
 ```
 
-- Guard `assertWorkspaceIsSafe` (`src/app/cli.ts:123`) — realpath, rechaza si workspace es `AGENT_INSTALL_DIR` o subcarpeta.
-- `AGENT_INSTALL_DIR` = `realpath(dirname(fileURLToPath(import.meta.url))/../..)` (resuelve symlink de `npm link`). `.env` y `storage-state.json` viven ahí, nunca en el workspace.
-- `ToolRegistry` (`src/domain/tools/registry.ts:10`) — única fuente de verdad para tools; `getSchemasForMode("plan")` filtra por `readOnly` flag, `freeze()` tras `registerAll` (inmutable). Agregar un tool = crear `definitions/<name>/` + registrar en `domain/tools/index.ts`.
-- Guard `resolveSafe` (`src/shared/safePath.ts:7`) — `=== base || startsWith(base+sep)` + `realpathSync` probe del ancestro (bloquea symlinks fuera del workspace).
-- `src/app/agent/agent.ts:51` — `init()` idempotente + auto-init en `run()`, guard plan usa `toolDef.readOnly` (no Set duplicado), reusa `toolDef`.
-- `src/infrastructure/browser/session.ts:36` — `closeSession` cierra `context` y `browser`; `SELECTORS` genéricos fallback (`src/infrastructure/browser/selectors.ts:1`).
-- `src/infrastructure/browser/findChromium.ts:4` — `log.warn` en vez de `console.warn`.
-- `src/infrastructure/providers/webClient.ts:13` — `_sessionPromise` lock sin `as never`, ids `call_${Date.now()}_${random}`.
-- `src/infrastructure/providers/index.ts` — factory solo web (Playwright a `chat.deepseek.com`, `MODEL_PROVIDER` deprecado).
-- `src/infrastructure/logger/logger.ts:8` — `createLogger(context)` y `rootLogger`; pino con `pino-pretty` solo si no es prod y es TTY; `LOG_LEVEL/LOG_PRETTY` strip `\r/quotes`, acepta `sí/si`.
+### Responsabilidades clave
 
-## Config (.env en AGENT_INSTALL_DIR)
+- `app/agent/agent.ts`: orquesta el ciclo del agente, presupuesto de exploración, tool-calling, mutaciones, verificación y recovery. Persiste turnos con `requestHash` y decide retry/rotación de chat.
+- `app/agent/taskState.ts`: mantiene la fase de la tarea y sus contadores.
+- `domain/execution/`: aplica cambios de forma transaccional y calcula snapshots SHA-256.
+- `domain/verification/`: comprueba cambios físicos y ejecuta verificaciones apropiadas al proyecto.
+- `domain/tools/`: contiene las 11 herramientas y su registro central.
+- `domain/task/taskPersistence.ts`: persistencia durable (`state.json`, `metadata.json`, `events.jsonl`, `turns/*.json`) bajo `~/.dscode/tasks`.
+- `domain/recovery/recoveryManager.ts`: construye recovery packs y decide tipo de recuperación.
+- `domain/llm/llmError.ts`: clasifica fallos DeepSeek (`TARGET_CLOSED`, `CONTEXT_EXHAUSTED`, `AUTH_REQUIRED`, `CLOUDFLARE_CHALLENGE`, etc.) y su reintento/rotación.
+- `infrastructure/browser/`: sesión Playwright, login, selectores reales y detección de Chromium.
+- `infrastructure/deepseek/domAdapter.ts`: adaptador DOM basado en capturas reales (`DeepSeekDomAdapter`, snapshot, `waitUntilReady`, detección de estado).
+- `infrastructure/deepseek/diagnostics/`: inspector permanente de la UI real de DeepSeek. Captura HTML, screenshot opcional, inventario interactivo, señales observables y cambios del DOM; no se usa en el flujo normal del agente.
+- `infrastructure/providers/`: comunicación con DeepSeek Web y protocolo de tool-calling (usa `domAdapter` y `selectors`).
+- `ui/banner.ts`: cabecera 3.5.1 con marca DeepSeek, versión, workspace, branch, `AGENTS.md` y modo PLAN/BUILD.
+- `ui/recoveryPrompt.ts`: menú interactivo de recuperación (`retry`/`new_chat`/`pause`/`cancel`).
+- `ui/`: REPL, modo PLAN/BUILD, historial y salida compacta.
 
-```
-HEADLESS=true            # web: login/calibrate fuerzan visible igual
-STORAGE_STATE_PATH=./storage-state.json
-RESPONSE_TIMEOUT_MS=300000
-CHROMIUM_EXECUTABLE_PATH=./chrome-linux64/chrome  # auto-detecta si vacío
-CHAT_URL=https://chat.deepseek.com/
-```
+## Flujo de una tarea
 
-`dotenv` carga `AGENT_INSTALL_DIR/.env`, no `cwd/.env`.
+La máquina de estados usa estas fases:
 
-## Convenciones
+`understand → discover → inspect → edit → verify → repair → complete`
 
-- Stack: TypeScript estricto (`strict: true`, `NodeNext`), ESM nativo, `tsc` → `dist/`. `allowJs: false`.
-- Antes de editar: `read_file` primero; antes de crear: `list_directory` para confirmar ruta.
-- `write_file` crea directorios intermedios automáticamente.
-- No modificar `storage-state.json` manualmente — regenerar con `dscode login`.
-- Chromium local en `chrome-linux64/` (no versionado idealmente).
-- Logger: `import { createLogger } from "../../infrastructure/logger/logger.js"` → `createLogger("dominio:context")`. Usa `LOG_LEVEL=debug` para ver trazas. No uses `console.log` en código nuevo.
-- Nuevo tool: crea `src/domain/tools/definitions/<name>/<name>.tool.ts` que exporte `ToolDefinition`, y regístralo en `src/domain/tools/index.ts`. El registry genera automáticamente el schema tool-calling.
-- Validación de env: `src/config/env.schema.ts` (zod). No leas `process.env` directo fuera de `shared/env.ts` o `config/`.
+No todas las tareas pasan por todas las fases. Una consulta que no modifica archivos puede terminar después de analizar la información disponible.
+
+### Regla fundamental de BUILD
+
+Cuando ya existe suficiente contexto para implementar la solicitud, el agente debe **editar**, no seguir leyendo por inercia. El runtime aplica presupuestos para evitar ciclos de exploración.
+
+Antes de modificar un archivo existente:
+
+1. localizarlo;
+2. leerlo;
+3. conservar el snapshot de esa lectura;
+4. ejecutar una mutación con `expected_hash` inyectado por el runtime;
+5. comprobar `changed=true`;
+6. verificar el resultado.
+
+## Protecciones de edición
+
+Las mutaciones (`write_file`, `edit_file`, `apply_patch` y `delete_file`) utilizan transacciones y snapshots.
+
+Si el archivo cambió entre la lectura y la edición, el hash actual no coincide con `expected_hash` y la operación se rechaza con un conflicto de edición. Esto evita sobrescribir silenciosamente cambios externos.
+
+Una mutación tampoco se considera completada solo porque la herramienta respondió: debe existir evidencia física de cambio (`changed=true`) y después ejecutarse la verificación correspondiente.
+
+## Presupuestos
+
+Valores por defecto definidos en `src/shared/constants.ts`:
+
+| Límite | Por defecto |
+|---|---:|
+| Iteraciones de tools | 30 |
+| Lecturas por archivo | 4 |
+| Lecturas totales por tarea | 12 |
+| Lectura máxima de archivo | 40.000 caracteres |
+| Resultado máximo de tool | 24.000 caracteres |
+| `read_many` | 40 archivos |
+| `glob` | 200 resultados |
+| Timeout de comandos | 60 s |
+| Timeout de búsqueda | 30 s |
+| Intentos LLM por turno | 3 |
+| Aviso de contexto | 90.000 caracteres |
+| Límite crítico de contexto | 120.000 caracteres |
+
+Todos los límites configurables usan variables `DSCODE_*` documentadas en el README.
+
+## Contexto del proyecto
+
+El loader busca:
+
+- `AGENTS.md` en la raíz;
+- `AGENTS.md` anidados hasta 3 niveles;
+- Markdown dentro de `.agent/`, `agents/` y `.deepseek/`.
+
+El contexto se limita antes de enviarse al modelo. Los archivos de convenciones se enumeran y se cargan bajo demanda para no inflar cada turno.
+
+## Herramientas
+
+El registro central contiene 11 tools:
+
+`read_file`, `write_file`, `list_directory`, `run_command`, `search_files`, `delete_file`, `edit_file`, `read_many`, `glob`, `apply_patch`, `diagnostics`.
+
+Al agregar una tool nueva:
+
+1. crear su carpeta en `src/domain/tools/definitions/<name>/`;
+2. exportar un `ToolDefinition`;
+3. registrarla en `src/domain/tools/index.ts`;
+4. añadir pruebas si introduce comportamiento nuevo.
+
+## Seguridad del workspace
+
+Toda operación de filesystem debe respetar `resolveSafe(workspaceDir, relPath)`. El guard del CLI también impide utilizar como workspace la propia instalación de `dscode` o cualquiera de sus subdirectorios.
+
+`run_command` no constituye un sandbox de seguridad: utiliza el shell del sistema. Las listas de patrones bloqueados solo frenan comandos destructivos obvios; no deben presentarse como una frontera de seguridad fuerte.
+
+## Configuración y secretos
+
+La configuración se carga desde `<AGENT_INSTALL_DIR>/.env`.
+
+Nunca commits `.env`, `storage-state.json` ni credenciales. Usa `.env.example` como plantilla.
+
+`MODEL_PROVIDER` es una variable heredada/deprecada: la implementación actual utiliza exclusivamente DeepSeek Web mediante Playwright. No documentar una API de DeepSeek como proveedor activo sin implementar primero ese backend.
+
+## Estilo
+
+- TypeScript estricto y ESM.
+- Imports con extensión `.js` en el código TypeScript compilado como NodeNext.
+- No introducir `any` sin necesidad.
+- Preferir `createLogger()` sobre `console.log` en módulos de aplicación.
+- Mantener cambios pequeños y verificables.
+- No afirmar que una edición ocurrió hasta ejecutar la tool correspondiente.

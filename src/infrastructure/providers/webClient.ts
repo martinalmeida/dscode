@@ -14,6 +14,7 @@ import {
 } from "./toolProtocol.js";
 import { createLogger } from "../logger/logger.js";
 import { getEnvNumber } from "../../shared/env.js";
+import { DeepSeekDomAdapter } from "../deepseek/domAdapter.js";
 
 const log = createLogger("providers:webClient");
 
@@ -90,6 +91,13 @@ export class DeepSeekWebClient {
     return this._sessionPromise;
   }
 
+  async recoverNewChat(): Promise<void> {
+    const session = await this._getSession();
+    await startNewChat(session);
+    session.historyLength = 0;
+    log.info("DeepSeek chat rotado para recuperación");
+  }
+
   async close(): Promise<void> {
     if (this._session) {
       await closeSession(this._session);
@@ -108,6 +116,31 @@ export class DeepSeekWebClient {
         return await sendMessage(session, text, opts);
       } catch (err) {
         const msg = (err as Error).message || "";
+        try {
+          const adapter = new DeepSeekDomAdapter(session.page);
+          if (await adapter.isContextExhausted()) {
+            const e = new Error("DeepSeek alcanzó el límite de contexto de este chat.") as Error & {
+              code: string;
+            };
+            e.code = "CONTEXT_EXHAUSTED";
+            throw e;
+          }
+          if (await adapter.isCloudflare()) {
+            const e = new Error(
+              "DeepSeek requiere completar una verificación de Cloudflare/Turnstile."
+            ) as Error & { code: string };
+            e.code = "CLOUDFLARE_CHALLENGE";
+            throw e;
+          }
+          const activeError = await adapter.activeErrorText();
+          if (activeError) {
+            log.warn({ activeError }, "DeepSeek mostró una notificación de error");
+          }
+        } catch (contextError) {
+          const contextCode = (contextError as { code?: string }).code;
+          if (contextCode === "CONTEXT_EXHAUSTED" || contextCode === "CLOUDFLARE_CHALLENGE")
+            throw contextError;
+        }
         const retryable =
           !/[DSCODE_AUTH_REQUIRED]|AUTH_REQUIRED/i.test(msg) &&
           /Target closed|Page closed|browser has been closed|Execution context was destroyed|Timeout.*fill|waiting for locator.*textarea|textarea mismatch|textarea evaluate|sendButton disabled/i.test(
